@@ -1,12 +1,11 @@
-from sqlalchemy import Table, Column, Integer, String, Float, DateTime
-from datetime import datetime
-from .database import metadata
+from sqlalchemy import Column, Integer, Float, String, DateTime
+from .database import Base
 
-readings = Table(
-    "readings",
-    metadata,
-    Column("id", Integer, primary_key=True),
-    Column("household", String, nullable=False),
-    Column("amount", Float, nullable=False),
-    Column("timestamp", DateTime, default=datetime.utcnow)
-)
+class Reading(Base):
+    __tablename__ = "readings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    mi = Column(String)
+    reading = Column(Float)
+    record_date = Column(DateTime)
+    unit = Column(Integer)

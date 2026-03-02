@@ -1,13 +1,14 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File
+import csv
+from io import StringIO
 from fastapi.middleware.cors import CORSMiddleware
-from .database import database, metadata, engine
-from .models import readings
+from .database import SessionLocal, engine
+from .models import Base, Reading
 from datetime import datetime
 from pydantic import BaseModel
 
 # Create tables if they don't exist
-metadata.create_all(engine)
-
+Base.metadata.create_all(bind=engine)
 app = FastAPI()
 
 class ReadingCreate(BaseModel):
@@ -24,39 +25,67 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.on_event("startup")
-async def startup():
-    await database.connect()
-
-@app.on_event("shutdown")
-async def shutdown():
-    await database.disconnect()
-
 # Health endpoint
 @app.get("/health")
 async def health():
     return {"status": "ok"}
 
 # Add a reading
-
 @app.post("/readings")
 async def add_reading(reading: ReadingCreate):
-    query = readings.insert().values(
-        household=reading.household,
-        amount=reading.amount,
-        timestamp=datetime.utcnow()
+    db = SessionLocal()
+
+    new_reading = Reading(
+        mi=reading.household,
+        reading=reading.amount,
+        record_date=datetime.utcnow(),
+        unit=1
     )
 
-    last_record_id = await database.execute(query)
+    db.add(new_reading)
+    db.commit()
+    db.refresh(new_reading)
+    db.close()
 
-    return {
-        "id": last_record_id,
-        "household": reading.household,
-        "amount": reading.amount
-    }
+    return new_reading
 
 # Get all readings
 @app.get("/readings")
 async def get_readings():
-    query = readings.select()
-    return await database.fetch_all(query)
+    db = SessionLocal()
+    readings = db.query(Reading).all()
+    db.close()
+    return readings
+
+# Import data from CSV File
+@app.post("/import-csv")
+async def import_csv(file: UploadFile = File(...)):
+    db = SessionLocal()
+
+    contents = await file.read()
+    csv_text = contents.decode("utf-8")
+    reader = csv.DictReader(StringIO(csv_text), delimiter=",")  # <-- fix here
+
+    inserted = 0
+
+    for row in reader:
+        try:
+            parsed_date = datetime.strptime(row["record_date"], "%Y-%m-%d")  # adjust format if needed
+
+            reading = Reading(
+                mi=row["mi"],
+                reading=float(row["reading"]),
+                record_date=parsed_date,
+                unit=int(row["unit"])
+            )
+
+            db.add(reading)
+            inserted += 1
+
+        except Exception as e:
+            print("Skipping row:", row, e)
+
+    db.commit()
+    db.close()
+
+    return {"message": f"{inserted} rows imported successfully"}

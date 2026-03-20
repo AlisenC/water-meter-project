@@ -133,7 +133,7 @@ flowchart TD
       FE --> API[Axios Client\napi.js]
     end
 
-    RT -->|POST /readings\n{household, amount}| API
+    RT -->|POST /readings\\npayload: household, amount| API
     CSV -->|POST /import-csv\nmultipart/form-data| API
     FE -->|GET /readings| API
 

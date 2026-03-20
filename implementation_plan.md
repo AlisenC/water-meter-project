@@ -1,35 +1,32 @@
 # Implementation Plan
 
 [Overview]
-Prepare and relaunch the frontend UI reliably by rebuilding assets, starting the development server, and documenting exact run commands and expected runtime behavior.
+Create and publish a new git branch to the requested remote by correcting remote configuration and resolving authentication/access prerequisites.
 
-This implementation focuses on operational reliability rather than feature development. The project uses a Vite + React frontend and a FastAPI backend; the immediate objective is to ensure the UI can be rebuilt and relaunched cleanly in the current local environment.
+The scope is repository operations only: branch management, remote URL configuration, credential validation, and push verification. No application code behavior changes are required. The recent failures indicate SSH public key authentication is not functioning in the current environment, so the implementation must include explicit fallback and validation paths.
 
-The plan emphasizes deterministic command execution, handling common local blockers (port conflicts and dependency/network issues), and producing repeatable launch instructions. It also captures alignment between frontend API usage and backend CORS constraints so the UI can communicate with the backend after launch.
+The approach prioritizes deterministic git checks (status, branch, remote), then controlled push attempts with precise error handling. If SSH cannot authenticate, the process falls back to HTTPS + PAT workflow (or confirms SSH agent/key setup) before retrying push. This ensures the branch is actually published rather than only created locally.
 
 [Types]
 No application type system changes are required.
 
-No new interfaces, enums, or schema definitions will be introduced. Existing runtime data shapes remain unchanged:
-- Frontend reads API response records with fields compatible with `mi`, `reading`, `record_date`, and `unit`.
-- Frontend request payload for creating readings remains `{ household: string, amount: number }`.
+No runtime data models, interfaces, enums, or API contracts are added or modified. The only structured outputs are operational command results (git status, remote settings, and push outcomes).
 
 [Files]
-Only operational planning artifacts are added; application source files are not modified for this task.
+Only git metadata and planning artifacts are touched; application source files are not modified.
 
 Detailed breakdown:
-- New files:
-  - `implementation_plan.md`: execution plan for rebuilding and relaunching UI.
-- Existing files to review (no code edits planned):
-  - `frontend/package.json` (scripts: `build`, `dev`)
-  - `frontend/.npmrc` (current local npm SSL behavior)
-  - `frontend/src/App.jsx`, `frontend/src/api.js`
-  - `backend/main.py` (CORS and API endpoints)
-- No files deleted or moved.
-- No configuration changes required unless environment/network failures persist.
+- Existing files potentially modified:
+  - `.git/config` (remote `origin` URL updates if needed).
+  - `implementation_plan.md` (this plan document).
+- Existing files reviewed (read-only):
+  - `.git/config` for current `origin` and branch mappings.
+- New files: none required beyond this plan file.
+- Files deleted/moved: none.
+- Configuration updates are limited to git remote/auth setup.
 
 [Functions]
-No function-level code changes are required.
+No application function changes are required.
 
 New functions: none.
 
@@ -47,25 +44,28 @@ Modified classes: none.
 Removed classes: none.
 
 [Dependencies]
-No dependency version changes are required for this task.
+No package dependency changes are required.
 
-Use the existing frontend dependency graph as locked in `frontend/package-lock.json`. If installation fails due to registry policy/certificates, treat as environment blocker and surface remediation steps instead of mutating package versions.
+External dependency consideration is credential tooling only:
+- SSH key availability in local agent (`ssh-add -l`).
+- GitHub access via SSH or HTTPS personal access token.
 
 [Testing]
-Validation is operational and runtime-focused.
+Validation is git-operation focused.
 
 Validation strategy:
-- Run `npm --prefix frontend run build` and confirm a successful Vite production build.
-- Run `npm --prefix frontend run dev` and confirm server startup + local URL.
-- Verify UI is reachable in browser and can fetch backend data from `/readings`.
-- If port `5173` is occupied, accept Vite-assigned fallback port and report it.
+- Verify active branch is `feature_ai_agent_v2` (or requested branch).
+- Verify `origin` points to the requested URL.
+- Execute push with upstream set: `git push -u origin <branch>`.
+- Confirm remote branch visibility via `git ls-remote --heads origin <branch>`.
+- If auth fails, validate fallback path (SSH key load or HTTPS remote + token), then re-run push.
 
 [Implementation Order]
-Execute environment-safe operational steps in sequence to minimize runtime conflicts.
+Execute git operations in strict order to ensure publish success and traceable failure handling.
 
-1. Confirm frontend scripts and current environment constraints (`package.json`, `.npmrc`, active ports/processes).
-2. Ensure dependencies are present and not mid-conflict from stale install processes.
-3. Execute `npm --prefix frontend run build` and verify completion.
-4. Execute `npm --prefix frontend run dev` and capture served local URL.
-5. Validate frontend loads and backend calls succeed; report blockers and exact remediation commands if any.
-6. Provide final concise run command set for repeatability.
+1. Confirm working tree and active branch (`git status --short --branch`).
+2. Create/switch to target branch if absent (`git checkout -b <branch>` or `git checkout <branch>`).
+3. Set `origin` to requested remote (`git remote set-url origin <url>`), then verify with `git remote -v`.
+4. Attempt push with upstream (`git push -u origin <branch>`).
+5. On auth failure, resolve credentials (SSH agent/key or HTTPS+PAT), then retry push.
+6. Verify remote branch exists and report final success/failure with exact blocking cause.

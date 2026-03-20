@@ -1,71 +1,163 @@
 # Implementation Plan
 
 [Overview]
-Create and publish a new git branch to the requested remote by correcting remote configuration and resolving authentication/access prerequisites.
+Refactor and stabilize the full frontend↔backend flow for reading creation, listing, and CSV import so behavior is consistent, resilient, and contract-aligned.
 
-The scope is repository operations only: branch management, remote URL configuration, credential validation, and push verification. No application code behavior changes are required. The recent failures indicate SSH public key authentication is not functioning in the current environment, so the implementation must include explicit fallback and validation paths.
+This implementation focuses on end-to-end correctness rather than adding new product features. Right now, the stack has drift between frontend request payloads and backend expectations (`mi/reading` vs `household/amount`), weak error-state behavior, and duplicated async orchestration spread across components. Those issues cause unstable UX and brittle integrations under normal failures (bad inputs, network errors, malformed CSV rows).
 
-The approach prioritizes deterministic git checks (status, branch, remote), then controlled push attempts with precise error handling. If SSH cannot authenticate, the process falls back to HTTPS + PAT workflow (or confirms SSH agent/key setup) before retrying push. This ensures the branch is actually published rather than only created locally.
+The high-level approach is to normalize contracts at the API boundary, centralize orchestration in the page container, simplify child components into controlled interaction layers, and enforce safe backend transaction/session patterns. This reduces mismatch bugs and stabilizes data round-trips without changing the project’s core architecture.
 
 [Types]
-No application type system changes are required.
+Establish explicit request/response and UI state data contracts across frontend and backend.
 
-No runtime data models, interfaces, enums, or API contracts are added or modified. The only structured outputs are operational command results (git status, remote settings, and push outcomes).
+Detailed definitions:
+- Frontend normalized model (`ReadingViewModel`):
+  - `id: number`
+  - `mi: string`
+  - `reading: number`
+  - `record_date?: string`
+  - `unit?: number`
+- Frontend request model for add-reading form:
+  - `mi: string` (trimmed, required)
+  - `reading: number` (finite, `>= 0`)
+- Backend create input model (keep single canonical API contract):
+  - Option A (recommended): `household: str`, `amount: float`
+  - Option B: migrate to `mi: str`, `reading: float`
+  - Plan will enforce one canonical mapping and remove ambiguity.
+- UI async status shape:
+  - `isLoadingReadings`, `isSubmittingReading`, `isUploadingCsv`
+  - `loadError`, `submitError`, `uploadError`, `uploadSuccess`
+
+Validation rules:
+- Reject empty household/mi and negative/non-finite reading values.
+- CSV row parser validates required columns and type conversions before insert.
 
 [Files]
-Only git metadata and planning artifacts are touched; application source files are not modified.
+Modify backend and frontend integration points to remove contract drift and async instability.
 
 Detailed breakdown:
-- Existing files potentially modified:
-  - `.git/config` (remote `origin` URL updates if needed).
-  - `implementation_plan.md` (this plan document).
-- Existing files reviewed (read-only):
-  - `.git/config` for current `origin` and branch mappings.
-- New files: none required beyond this plan file.
-- Files deleted/moved: none.
-- Configuration updates are limited to git remote/auth setup.
+- Existing files to modify:
+  - `backend/main.py`
+    - Standardize POST `/readings` request parsing.
+    - Add robust CSV parsing + per-row validation/error capture.
+    - Improve DB session handling and exception safety (`try/except/finally`).
+  - `backend/models.py`
+    - Verify model field usage consistency; optionally add non-null constraints where safe.
+  - `frontend/src/api.js`
+    - Add canonical mapper functions for request/response shape normalization.
+  - `frontend/src/App.jsx`
+    - Centralize async orchestration (`fetchReadings`, create, upload), state transitions, and retries.
+  - `frontend/src/components/ReadingTable.jsx`
+    - Use parent callback flow, input validation, loading disable, stable keys.
+  - `frontend/src/components/DashboardSummary.jsx`
+    - Harden summary computation against malformed values.
+- New files (optional but recommended):
+  - `frontend/src/utils/readingMapper.js` (if separating mapping concerns)
+- Files deleted/moved:
+  - None required.
+- Config updates:
+  - None mandatory.
 
 [Functions]
-No application function changes are required.
+Refactor function boundaries to isolate contracts, validation, and side effects.
 
-New functions: none.
-
-Modified functions: none.
-
-Removed functions: none.
+Detailed breakdown:
+- New functions:
+  - `fetchReadings()` in `frontend/src/App.jsx`
+  - `createReading(input)` in `frontend/src/api.js`
+  - `importCsv(file)` in `frontend/src/api.js`
+  - `normalizeReading(record)` in `frontend/src/api.js` (or mapper util)
+  - `validateReadingInput(input)` in `frontend/src/components/ReadingTable.jsx` (or shared util)
+- Modified functions:
+  - `add_reading()` in `backend/main.py`
+  - `import_csv()` in `backend/main.py`
+  - `App()` in `frontend/src/App.jsx`
+  - `handleSubmit()` in `frontend/src/components/ReadingTable.jsx`
+  - `DashboardSummary()` in `frontend/src/components/DashboardSummary.jsx`
+- Removed/replaced behaviors:
+  - Direct API POST logic inside child table component (moved to centralized orchestration)
+  - Implicit payload guessing between layers
 
 [Classes]
-No class-level changes are required.
+Class-level changes are minimal and limited to backend model consistency.
 
-New classes: none.
-
-Modified classes: none.
-
-Removed classes: none.
+Detailed breakdown:
+- New classes:
+  - None.
+- Modified classes:
+  - `Reading` in `backend/models.py` (only if adding safe constraints/indexes).
+- Removed classes:
+  - None.
 
 [Dependencies]
-No package dependency changes are required.
+No new package dependencies are required for stabilization.
 
-External dependency consideration is credential tooling only:
-- SSH key availability in local agent (`ssh-add -l`).
-- GitHub access via SSH or HTTPS personal access token.
+If needed, optional improvements can be made without dependency expansion (built-in validation and existing FastAPI/Pydantic/SQLAlchemy patterns are sufficient).
 
 [Testing]
-Validation is git-operation focused.
+Test the full flow under both happy and failure scenarios to verify stabilization.
 
 Validation strategy:
-- Verify active branch is `feature_ai_agent_v2` (or requested branch).
-- Verify `origin` points to the requested URL.
-- Execute push with upstream set: `git push -u origin <branch>`.
-- Confirm remote branch visibility via `git ls-remote --heads origin <branch>`.
-- If auth fails, validate fallback path (SSH key load or HTTPS remote + token), then re-run push.
+- Backend API checks:
+  - `POST /readings` with valid and invalid payloads.
+  - `GET /readings` after inserts/import.
+  - `POST /import-csv` with valid CSV, malformed rows, wrong columns.
+- Frontend behavior checks:
+  - Initial load states: loading/success/error.
+  - Add-reading validation and disabled-button behavior.
+  - CSV upload success/failure messaging and refresh correctness.
+- End-to-end consistency:
+  - Created reading appears in table and summary.
+  - CSV imported records appear consistently with expected fields.
 
 [Implementation Order]
-Execute git operations in strict order to ensure publish success and traceable failure handling.
+Execute contract alignment first, then orchestration refactor, then UX stabilization and verification.
 
-1. Confirm working tree and active branch (`git status --short --branch`).
-2. Create/switch to target branch if absent (`git checkout -b <branch>` or `git checkout <branch>`).
-3. Set `origin` to requested remote (`git remote set-url origin <url>`), then verify with `git remote -v`.
-4. Attempt push with upstream (`git push -u origin <branch>`).
-5. On auth failure, resolve credentials (SSH agent/key or HTTPS+PAT), then retry push.
-6. Verify remote branch exists and report final success/failure with exact blocking cause.
+1. Decide and lock canonical create-reading contract (`household/amount` vs `mi/reading`).
+2. Update backend `add_reading` and `import_csv` for validation + safe transaction handling.
+3. Update frontend API layer to canonicalize request/response mapping.
+4. Refactor `App.jsx` to centralize async flow and statuses.
+5. Refactor `ReadingTable.jsx` + `DashboardSummary.jsx` for robust UI behavior.
+6. Run end-to-end verification across create/list/import flows and edge cases.
+
+## End-to-End Workflow Graph
+
+```mermaid
+flowchart TD
+    U[User] --> FE[Frontend React App\nApp.jsx]
+
+    subgraph Frontend
+      FE --> RT[ReadingTable\nAdd Reading Form]
+      FE --> CSV[CSV Upload Control]
+      FE --> DS[DashboardSummary]
+      FE --> API[Axios Client\napi.js]
+    end
+
+    RT -->|POST /readings\n{household, amount}| API
+    CSV -->|POST /import-csv\nmultipart/form-data| API
+    FE -->|GET /readings| API
+
+    API --> BE[FastAPI Backend\nmain.py]
+
+    subgraph Backend
+      BE --> AR[add_reading()]
+      BE --> IR[import_csv()]
+      BE --> GR[get_readings()]
+    end
+
+    AR --> ORM[SQLAlchemy ORM\nReading model]
+    IR --> ORM
+    GR --> ORM
+
+    ORM --> DB[(SQLite Database)]
+
+    DB --> ORM
+    ORM --> GR
+    GR -->|JSON readings list| API
+    API --> FE
+
+    AR -->|Created reading response| API
+    IR -->|Import status message| API
+
+    FE -->|Update table + summary| U
+```

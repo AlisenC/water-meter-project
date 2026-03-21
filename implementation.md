@@ -4,40 +4,37 @@
 
 ```mermaid
 flowchart TD
-    U[User] --> FE[Frontend React App\nApp.jsx]
+    U[User] --> FE[Frontend React App<br>App.jsx]
 
     subgraph Frontend
-      FE --> RT[ReadingTable\nAdd Reading Form]
+      FE --> RT[ReadingTable<br>Add Reading Form]
       FE --> CSV[CSV Upload Control]
       FE --> DS[DashboardSummary]
-      FE --> API[Axios Client\napi.js]
+      FE --> API[Axios Client<br>api.js]
     end
 
-    RT -->|POST /readings\npayload: household, amount| API
-    CSV -->|POST /import-csv\nmultipart/form-data| API
-    FE -->|GET /readings| API
+    RT -->|POST /readings; application/json; fields household amount| API
+    CSV -->|POST /import-csv; multipart/form-data; file field file| API
+    FE -->|GET /readings with household page page_size| API
 
-    API --> BE[FastAPI Backend\nmain.py]
+    API --> BE[FastAPI Backend<br>main.py]
 
     subgraph Backend
-      BE --> AR[add_reading()]
-      BE --> IR[import_csv()]
-      BE --> GR[get_readings()]
+      BE --> AR[add_reading]
+      BE --> IR[import_csv]
+      BE --> GR[get_readings]
     end
 
-    AR --> ORM[SQLAlchemy ORM\nReading model]
+    AR --> ORM[SQLAlchemy ORM<br>Reading model]
     IR --> ORM
     GR --> ORM
 
     ORM --> DB[(SQLite Database)]
 
-    DB --> ORM
-    ORM --> GR
     GR -->|JSON readings list| API
-    API --> FE
-
     AR -->|Created reading response| API
     IR -->|Import status message| API
 
+    API --> FE
     FE -->|Update table + summary| U
 ```

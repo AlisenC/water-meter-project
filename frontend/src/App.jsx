@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { api } from "./api";
+import AIChat from "./components/AIChat";
 import ReadingTable from "./components/ReadingTable";
 import DashboardSummary from "./components/DashboardSummary";
 
@@ -46,6 +47,8 @@ function App() {
       <h1 className="text-2xl font-bold mb-4">Water Meter Dashboard</h1>
 
       <DashboardSummary readings={readings} />
+
+      <AIChat />
 
       {/* CSV Upload */}
       <div className="mb-4 flex gap-2 items-center">

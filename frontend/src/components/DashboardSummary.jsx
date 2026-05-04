@@ -1,6 +1,13 @@
 export default function DashboardSummary({ readings }) {
-  // Sum up all readings using the "reading" field
-  const total = readings.reduce((sum, r) => sum + r.reading, 0);
+  const sorted = [...readings].sort(
+    (a, b) => new Date(a.record_date) - new Date(b.record_date)
+  );
+
+  let total = 0;
+
+  for (let i = 1; i < sorted.length; i++) {
+    total += sorted[i].reading - sorted[i - 1].reading;
+  }
 
   return (
     <div className="p-4 bg-blue-50 rounded-md mb-4">

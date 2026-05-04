@@ -6,6 +6,8 @@ from .database import SessionLocal, engine
 from .models import Base, Reading
 from datetime import datetime
 from pydantic import BaseModel
+from collections import defaultdict
+from .ai_agent import router as ai_router
 
 # Create tables if they don't exist
 Base.metadata.create_all(bind=engine)
@@ -14,6 +16,9 @@ app = FastAPI()
 class ReadingCreate(BaseModel):
     household: str
     amount: float
+
+# AI Agent Router
+app.include_router(ai_router, prefix="/ai")
 
 # CORS
 origins = ["http://localhost:5173"]
@@ -57,20 +62,21 @@ async def get_readings():
     db.close()
     return readings
 
-# Import data from CSV File
+# Import CSV
 @app.post("/import-csv")
 async def import_csv(file: UploadFile = File(...)):
     db = SessionLocal()
 
     contents = await file.read()
     csv_text = contents.decode("utf-8")
-    reader = csv.DictReader(StringIO(csv_text), delimiter=",")  # <-- fix here
+
+    reader = csv.DictReader(StringIO(csv_text), delimiter=",")
 
     inserted = 0
 
     for row in reader:
         try:
-            parsed_date = datetime.strptime(row["record_date"], "%Y-%m-%d")  # adjust format if needed
+            parsed_date = datetime.strptime(row["record_date"], "%Y-%m-%d")
 
             reading = Reading(
                 mi=row["mi"],
@@ -89,3 +95,41 @@ async def import_csv(file: UploadFile = File(...)):
     db.close()
 
     return {"message": f"{inserted} rows imported successfully"}
+
+# Detect anomalies in usage
+@app.get("/anomalies")
+async def detect_anomalies():
+    db = SessionLocal()
+    rows = db.query(Reading).all()
+    db.close()
+
+    data = defaultdict(list)
+
+    for r in rows:
+        data[r.mi].append((r.record_date, r.reading))
+
+    anomalies = []
+
+    for household, values in data.items():
+        if len(values) < 3:
+            continue
+
+        values.sort(key=lambda x: x[0])
+
+        prev_usage = values[-2][1] - values[-3][1]
+        curr_usage = values[-1][1] - values[-2][1]
+
+        if prev_usage <= 0:
+            continue
+
+        pct = ((curr_usage - prev_usage) / prev_usage) * 100
+
+        if pct > 150:
+            anomalies.append({
+                "household": household,
+                "previous_usage": prev_usage,
+                "current_usage": curr_usage,
+                "increase_percent": round(pct, 2)
+            })
+
+    return anomalies

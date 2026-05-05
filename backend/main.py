@@ -96,6 +96,20 @@ async def import_csv(file: UploadFile = File(...)):
 
     return {"message": f"{inserted} rows imported successfully"}
 
+# Delete a reading
+@app.delete("/readings/{reading_id}")
+async def delete_reading(reading_id: int):
+    db = SessionLocal()
+    reading = db.query(Reading).filter(Reading.id == reading_id).first()
+    if not reading:
+        db.close()
+        from fastapi import HTTPException
+        raise HTTPException(status_code=404, detail="Reading not found")
+    db.delete(reading)
+    db.commit()
+    db.close()
+    return {"ok": True}
+
 # Detect anomalies in usage
 @app.get("/anomalies")
 async def detect_anomalies():

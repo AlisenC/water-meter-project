@@ -2,27 +2,31 @@ import { useState } from "react";
 import { api } from "../api";
 
 export default function ReadingTable({ readings, setReadings }) {
-  const [mi, setMi] = useState("");            // was household
-  const [reading, setReading] = useState("");  // was amount
+  const [mi, setMi] = useState("");
+  const [reading, setReading] = useState("");
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-
     if (!mi || !reading) return;
-
     try {
       const response = await api.post("/readings", {
         mi,
         reading: parseFloat(reading),
       });
-
-      // Update UI immediately
       setReadings([...readings, response.data]);
-
       setMi("");
       setReading("");
     } catch (error) {
       console.error("Error creating reading:", error);
+    }
+  };
+
+  const handleDelete = async (id) => {
+    try {
+      await api.delete(`/readings/${id}`);
+      setReadings(readings.filter((r) => r.id !== id));
+    } catch (error) {
+      console.error("Error deleting reading:", error);
     }
   };
 
@@ -42,9 +46,7 @@ export default function ReadingTable({ readings, setReadings }) {
           onChange={(e) => setReading(e.target.value)}
           placeholder="Water usage"
         />
-        <button className="bg-blue-500 text-white px-4 py-2">
-          Add
-        </button>
+        <button className="bg-blue-500 text-white px-4 py-2">Add</button>
       </form>
 
       <table className="table-auto w-full border-collapse border border-gray-300">
@@ -54,22 +56,31 @@ export default function ReadingTable({ readings, setReadings }) {
             <th className="border px-2 py-1">Meter Reading</th>
             <th className="border px-2 py-1">Date</th>
             <th className="border px-2 py-1">Unit</th>
+            <th className="border px-2 py-1"></th>
           </tr>
         </thead>
-
         <tbody>
-            {[...readings]
-              .sort((a,b) => new Date(b.record_date) - new Date(a.record_date))
-              .map((r, i) => (
-                        <tr key={i}>
-              <td className="border px-2 py-1">{r.mi}</td>
-              <td className="border px-2 py-1">{r.reading}</td>
-              <td className="border px-2 py-1">
-                {new Date(r.record_date).toLocaleDateString()}
-              </td>
-              <td className="border px-2 py-1">{r.unit}</td>
-            </tr>
-          ))}
+          {[...readings]
+            .sort((a, b) => new Date(b.record_date) - new Date(a.record_date))
+            .map((r) => (
+              <tr key={r.id}>
+                <td className="border px-2 py-1">{r.mi}</td>
+                <td className="border px-2 py-1">{r.reading}</td>
+                <td className="border px-2 py-1">
+                  {new Date(r.record_date).toLocaleDateString()}
+                </td>
+                <td className="border px-2 py-1">{r.unit}</td>
+                <td className="border px-2 py-1 text-center">
+                  <button
+                    onClick={() => handleDelete(r.id)}
+                    className="text-red-500 hover:text-red-700 font-bold leading-none"
+                    title="Delete row"
+                  >
+                    ×
+                  </button>
+                </td>
+              </tr>
+            ))}
         </tbody>
       </table>
     </div>

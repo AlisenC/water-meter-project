@@ -3,10 +3,12 @@ import { api } from "./api";
 import AIChat from "./components/AIChat";
 import ReadingTable from "./components/ReadingTable";
 import DashboardSummary from "./components/DashboardSummary";
+import UsageCharts from "./components/UsageCharts";
 
 function App() {
   const [readings, setReadings] = useState([]);
   const [csvFile, setCsvFile] = useState(null);
+  const [uploadStatus, setUploadStatus] = useState(null);
 
   useEffect(() => {
     // Fetch all readings from backend
@@ -27,15 +29,13 @@ function App() {
     formData.append("file", csvFile);
 
     try {
-      const res = await api.post("/import-csv", formData, {
-        headers: { "Content-Type": "multipart/form-data" },
-      });
-      console.log(res.data.message);
+      const res = await api.post("/import-csv", formData);
+      setUploadStatus({ ok: true, message: res.data.message });
 
-      // Refetch updated readings
       const updated = await api.get("/readings");
       setReadings(updated.data);
     } catch (error) {
+      setUploadStatus({ ok: false, message: "Upload failed. Check the CSV format." });
       console.error("CSV upload failed:", error);
     } finally {
       setCsvFile(null);
@@ -48,10 +48,12 @@ function App() {
 
       <DashboardSummary readings={readings} />
 
+      <UsageCharts readings={readings} />
+
       <AIChat />
 
       {/* CSV Upload */}
-      <div className="mb-4 flex gap-2 items-center">
+      <div className="mb-4 flex gap-2 items-center flex-wrap">
         <input type="file" accept=".csv" onChange={handleFileChange} />
         <button
           onClick={handleUpload}
@@ -59,6 +61,11 @@ function App() {
         >
           Upload CSV
         </button>
+        {uploadStatus && (
+          <span className={uploadStatus.ok ? "text-green-600 text-sm" : "text-red-600 text-sm"}>
+            {uploadStatus.message}
+          </span>
+        )}
       </div>
 
       <ReadingTable readings={readings} setReadings={setReadings} />

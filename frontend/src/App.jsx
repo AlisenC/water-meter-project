@@ -4,25 +4,28 @@ import AIChat from "./components/AIChat";
 import ReadingTable from "./components/ReadingTable";
 import DashboardSummary from "./components/DashboardSummary";
 import UsageCharts from "./components/UsageCharts";
+import DataQuality from "./components/DataQuality";
 
 function App() {
   const [readings, setReadings] = useState([]);
+  const [anomalies, setAnomalies] = useState([]);
   const [csvFile, setCsvFile] = useState(null);
   const [uploadStatus, setUploadStatus] = useState(null);
+  const [importReport, setImportReport] = useState(null);
 
   useEffect(() => {
-    // Fetch all readings from backend
-    api.get("/readings").then((res) => {
-      setReadings(res.data);
-    });
+    Promise.all([api.get("/readings"), api.get("/anomalies")]).then(
+      ([readingsRes, anomaliesRes]) => {
+        setReadings(readingsRes.data);
+        setAnomalies(anomaliesRes.data);
+      }
+    );
   }, []);
 
-  // Handle CSV file selection
   const handleFileChange = (e) => {
     setCsvFile(e.target.files[0]);
   };
 
-  // Upload CSV file to backend
   const handleUpload = async () => {
     if (!csvFile) return;
     const formData = new FormData();
@@ -30,12 +33,22 @@ function App() {
 
     try {
       const res = await api.post("/import-csv", formData);
-      setUploadStatus({ ok: true, message: res.data.message });
+      const report = res.data;
+      setImportReport(report);
+      setUploadStatus({
+        ok: true,
+        message: `${report.inserted} rows imported, ${report.skipped} skipped.`,
+      });
 
-      const updated = await api.get("/readings");
-      setReadings(updated.data);
+      const [updatedReadings, updatedAnomalies] = await Promise.all([
+        api.get("/readings"),
+        api.get("/anomalies"),
+      ]);
+      setReadings(updatedReadings.data);
+      setAnomalies(updatedAnomalies.data);
     } catch (error) {
       setUploadStatus({ ok: false, message: "Upload failed. Check the CSV format." });
+      setImportReport(null);
       console.error("CSV upload failed:", error);
     } finally {
       setCsvFile(null);
@@ -46,7 +59,7 @@ function App() {
     <div className="p-6 max-w-3xl mx-auto">
       <h1 className="text-2xl font-bold mb-4">Water Meter Dashboard</h1>
 
-      <DashboardSummary readings={readings} />
+      <DashboardSummary readings={readings} anomalies={anomalies} />
 
       <UsageCharts readings={readings} />
 
@@ -67,6 +80,8 @@ function App() {
           </span>
         )}
       </div>
+
+      <DataQuality importReport={importReport} anomalies={anomalies} />
 
       <ReadingTable readings={readings} setReadings={setReadings} />
     </div>

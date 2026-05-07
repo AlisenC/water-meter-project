@@ -7,7 +7,10 @@ from .models import Base, Reading
 from datetime import datetime
 from pydantic import BaseModel
 from collections import defaultdict
+from statistics import median
 from .ai_agent import router as ai_router
+
+GAP_MULTIPLIER = 1.5
 
 # Create tables if they don't exist
 Base.metadata.create_all(bind=engine)
@@ -62,19 +65,37 @@ async def get_readings():
     db.close()
     return readings
 
+def validate_reading(row: dict, row_num: int) -> dict | None:
+    raw = row.get("reading", "").strip()
+    if not raw:
+        return {"row_num": row_num, "reason": "missing_reading", "raw_value": raw}
+    try:
+        float(raw)
+    except ValueError:
+        return {"row_num": row_num, "reason": "invalid_reading", "raw_value": raw}
+    return None
+
 # Import CSV
 @app.post("/import-csv")
 async def import_csv(file: UploadFile = File(...)):
     db = SessionLocal()
 
     contents = await file.read()
-    csv_text = contents.decode("utf-8")
+    csv_text = contents.decode("utf-8-sig")
 
     reader = csv.DictReader(StringIO(csv_text), delimiter=",")
 
     inserted = 0
+    skipped = 0
+    errors = []
 
-    for row in reader:
+    for row_num, row in enumerate(reader, start=1):
+        reading_error = validate_reading(row, row_num)
+        if reading_error:
+            errors.append(reading_error)
+            skipped += 1
+            continue
+
         try:
             parsed_date = datetime.strptime(row["record_date"], "%Y-%m-%d")
 
@@ -90,11 +111,12 @@ async def import_csv(file: UploadFile = File(...)):
 
         except Exception as e:
             print("Skipping row:", row, e)
+            skipped += 1
 
     db.commit()
     db.close()
 
-    return {"message": f"{inserted} rows imported successfully"}
+    return {"inserted": inserted, "skipped": skipped, "errors": errors}
 
 # Delete a reading
 @app.delete("/readings/{reading_id}")
@@ -109,6 +131,12 @@ async def delete_reading(reading_id: int):
     db.commit()
     db.close()
     return {"ok": True}
+
+def compute_median_interval(values: list) -> float:
+    if len(values) < 2:
+        return 1.0
+    gaps = [(values[i][0] - values[i - 1][0]).days for i in range(1, len(values))]
+    return median(gaps) if gaps else 1.0
 
 # Detect anomalies in usage
 @app.get("/anomalies")
@@ -129,21 +157,28 @@ async def detect_anomalies():
             continue
 
         values.sort(key=lambda x: x[0])
+        med_interval = compute_median_interval(values)
 
-        prev_usage = values[-2][1] - values[-3][1]
-        curr_usage = values[-1][1] - values[-2][1]
+        for i in range(2, len(values)):
+            prev_usage = values[i - 1][1] - values[i - 2][1]
+            curr_usage = values[i][1] - values[i - 1][1]
 
-        if prev_usage <= 0:
-            continue
+            if prev_usage <= 0:
+                continue
 
-        pct = ((curr_usage - prev_usage) / prev_usage) * 100
+            pct = ((curr_usage - prev_usage) / prev_usage) * 100
 
-        if pct > 150:
-            anomalies.append({
-                "household": household,
-                "previous_usage": prev_usage,
-                "current_usage": curr_usage,
-                "increase_percent": round(pct, 2)
-            })
+            if pct > 150:
+                gap_days = (values[i][0] - values[i - 1][0]).days
+                anomalies.append({
+                    "household": household,
+                    "previous_usage": round(prev_usage, 4),
+                    "current_usage": round(curr_usage, 4),
+                    "increase_percent": round(pct, 2),
+                    "reading_date": values[i][0].isoformat(),
+                    "gap_days": gap_days,
+                    "median_interval_days": round(med_interval, 1),
+                    "is_gap_induced": gap_days > GAP_MULTIPLIER * med_interval,
+                })
 
     return anomalies

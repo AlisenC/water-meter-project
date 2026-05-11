@@ -1,5 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Header
 import csv
+import os
 import base64
 import json
 import re
@@ -28,7 +29,8 @@ class ReadingCreate(BaseModel):
 app.include_router(ai_router, prefix="/ai")
 
 # CORS
-origins = ["http://localhost:5173"]
+_raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173")
+origins = [o.strip() for o in _raw_origins.split(",")]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,

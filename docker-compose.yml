@@ -1,0 +1,24 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - water_meter_data:/app/data
+    environment:
+      - DATABASE_URL=sqlite:////app/data/water_meter.db
+      - ALLOWED_ORIGINS=http://localhost
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_API_URL: http://localhost:8000
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  water_meter_data:

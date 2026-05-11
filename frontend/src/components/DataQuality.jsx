@@ -108,7 +108,6 @@ export default function DataQuality({ importReport, anomalies = [] }) {
                           {a.increase_percent}% spike on{" "}
                           {new Date(a.reading_date).toLocaleDateString("en-AU", {
                             month: "short",
-                            day: "numeric",
                             year: "numeric",
                           })}
                           {" "}

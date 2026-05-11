@@ -67,7 +67,7 @@ export default function ReadingTable({ readings, setReadings }) {
                 <td className="border px-2 py-1">{r.mi}</td>
                 <td className="border px-2 py-1">{r.reading}</td>
                 <td className="border px-2 py-1">
-                  {new Date(r.record_date).toLocaleDateString()}
+                  {new Date(r.record_date).toLocaleDateString("en-AU", { month: "short", year: "numeric" })}
                 </td>
                 <td className="border px-2 py-1">{r.unit}</td>
                 <td className="border px-2 py-1 text-center">

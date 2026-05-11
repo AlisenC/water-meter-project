@@ -12,7 +12,7 @@ function toGallons(reading, unit) {
 }
 
 function formatDate(dateStr) {
-  return new Date(dateStr).toLocaleDateString("en-AU", { month: "short", day: "numeric" });
+  return new Date(dateStr).toLocaleDateString("en-AU", { month: "short", year: "numeric" });
 }
 
 function groupByMi(readings) {

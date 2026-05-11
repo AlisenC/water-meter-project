@@ -5,22 +5,50 @@ import ReadingTable from "./components/ReadingTable";
 import DashboardSummary from "./components/DashboardSummary";
 import UsageCharts from "./components/UsageCharts";
 import DataQuality from "./components/DataQuality";
+import BillingImport from "./components/BillingImport";
+import ApiKeySettings from "./components/ApiKeySettings";
+
+const LS_KEY = "wm_api_key";
+const LS_PROVIDER = "wm_api_provider";
 
 function App() {
   const [readings, setReadings] = useState([]);
   const [anomalies, setAnomalies] = useState([]);
+  const [billingStatements, setBillingStatements] = useState([]);
+  const [verificationData, setVerificationData] = useState([]);
   const [csvFile, setCsvFile] = useState(null);
   const [uploadStatus, setUploadStatus] = useState(null);
   const [importReport, setImportReport] = useState(null);
+  const [apiKey, setApiKey] = useState(() => localStorage.getItem(LS_KEY) || "");
+  const [apiProvider, setApiProvider] = useState(() => localStorage.getItem(LS_PROVIDER) || "anthropic");
 
   useEffect(() => {
-    Promise.all([api.get("/readings"), api.get("/anomalies")]).then(
-      ([readingsRes, anomaliesRes]) => {
-        setReadings(readingsRes.data);
-        setAnomalies(anomaliesRes.data);
-      }
-    );
+    Promise.all([
+      api.get("/readings"),
+      api.get("/anomalies"),
+      api.get("/billing-statements"),
+      api.get("/billing-verify"),
+    ]).then(([readingsRes, anomaliesRes, billingsRes, verifyRes]) => {
+      setReadings(readingsRes.data);
+      setAnomalies(anomaliesRes.data);
+      setBillingStatements(billingsRes.data);
+      setVerificationData(verifyRes.data);
+    });
   }, []);
+
+  async function refreshBillingData() {
+    const [billingsRes, verifyRes] = await Promise.all([
+      api.get("/billing-statements"),
+      api.get("/billing-verify"),
+    ]);
+    setBillingStatements(billingsRes.data);
+    setVerificationData(verifyRes.data);
+  }
+
+  function handleBillingDelete(deletedId) {
+    setBillingStatements((prev) => prev.filter((s) => s.id !== deletedId));
+    setVerificationData((prev) => prev.filter((v) => v.billing_statement_id !== deletedId));
+  }
 
   const handleFileChange = (e) => {
     setCsvFile(e.target.files[0]);
@@ -59,11 +87,32 @@ function App() {
     <div className="p-6 max-w-3xl mx-auto">
       <h1 className="text-2xl font-bold mb-4">Water Meter Dashboard</h1>
 
-      <DashboardSummary readings={readings} anomalies={anomalies} />
+      <ApiKeySettings
+        apiKey={apiKey}
+        apiProvider={apiProvider}
+        onSave={(key, provider) => { setApiKey(key); setApiProvider(provider); }}
+        onClear={() => { setApiKey(""); setApiProvider("anthropic"); }}
+      />
+
+      <DashboardSummary
+        readings={readings}
+        anomalies={anomalies}
+        billingStatements={billingStatements}
+        verificationData={verificationData}
+      />
 
       <UsageCharts readings={readings} />
 
-      <AIChat />
+      <BillingImport
+        billingStatements={billingStatements}
+        verificationData={verificationData}
+        apiKey={apiKey}
+        apiProvider={apiProvider}
+        onImportSuccess={refreshBillingData}
+        onDelete={handleBillingDelete}
+      />
+
+      <AIChat apiKey={apiKey} apiProvider={apiProvider} />
 
       {/* CSV Upload */}
       <div className="mb-4 flex gap-2 items-center flex-wrap">

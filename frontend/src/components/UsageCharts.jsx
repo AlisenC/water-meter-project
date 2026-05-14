@@ -33,15 +33,15 @@ export default function UsageCharts({ readings }) {
   }
 
   const allGroups = groupByMi(readings);
-  // Separate MAIN from household meters
-  const households = Object.keys(allGroups).filter((mi) => mi !== "MAIN");
-  const groups = Object.fromEntries(households.map((mi) => [mi, allGroups[mi]]));
+  const allMeters = Object.keys(allGroups);
+  // Sub-meters only used for the comparison chart's householdSum (MAIN excluded to avoid double-counting)
+  const subMeters = allMeters.filter((mi) => mi !== "MAIN");
   const mainReadings = allGroups["MAIN"] ?? [];
 
-  // --- Existing charts (households only) ---
+  // --- Charts (all meters) ---
 
-  const barData = households.flatMap((mi) => {
-    const group = groups[mi];
+  const barData = allMeters.flatMap((mi) => {
+    const group = allGroups[mi];
     if (group.length < 2) return [];
     const prev = group[group.length - 2];
     const curr = group[group.length - 1];
@@ -59,8 +59,8 @@ export default function UsageCharts({ readings }) {
   const hasConsumptionData = barData.some((d) => d.total > 0);
 
   const dateMap = {};
-  for (const mi of households) {
-    const group = groups[mi];
+  for (const mi of allMeters) {
+    const group = allGroups[mi];
     for (let i = 1; i < group.length; i++) {
       const prev = toGallons(group[i - 1].reading, group[i - 1].unit);
       const curr = toGallons(group[i].reading, group[i].unit);
@@ -90,8 +90,8 @@ export default function UsageCharts({ readings }) {
     const periodEnd = new Date(mainCurr.record_date);
 
     let householdSum = 0;
-    for (const mi of households) {
-      const group = groups[mi];
+    for (const mi of subMeters) {
+      const group = allGroups[mi];
       // Find the reading closest to periodStart and periodEnd within this household
       const prevR = group.filter((r) => new Date(r.record_date) <= periodEnd && new Date(r.record_date) >= periodStart)
         .sort((a, b) => new Date(a.record_date) - new Date(b.record_date));
@@ -157,10 +157,10 @@ export default function UsageCharts({ readings }) {
         </div>
       )}
 
-      {/* Line chart — households only */}
+      {/* Line chart — all meters */}
       {lineData.length > 0 && (
         <div className="bg-white rounded-md p-4 border border-gray-200">
-          <h3 className="text-lg font-semibold mb-3">Household Consumption Over Time</h3>
+          <h3 className="text-lg font-semibold mb-3">Consumption Over Time</h3>
           <ResponsiveContainer width="100%" height={260}>
             <LineChart data={lineData}>
               <CartesianGrid strokeDasharray="3 3" />
@@ -168,7 +168,7 @@ export default function UsageCharts({ readings }) {
               <YAxis unit=" gal" tick={{ fontSize: 11 }} />
               <Tooltip formatter={(v) => `${v} gal`} />
               <Legend />
-              {households.map((mi, i) => (
+              {allMeters.map((mi, i) => (
                 <Line
                   key={mi}
                   type="monotone"
@@ -183,10 +183,10 @@ export default function UsageCharts({ readings }) {
         </div>
       )}
 
-      {/* Bar chart — households only */}
+      {/* Bar chart — all meters */}
       {hasConsumptionData ? (
         <div className="bg-white rounded-md p-4 border border-gray-200">
-          <h3 className="text-lg font-semibold mb-3">Latest Consumption by Household</h3>
+          <h3 className="text-lg font-semibold mb-3">Latest Consumption by Meter</h3>
           <ResponsiveContainer width="100%" height={220}>
             <BarChart data={barData}>
               <CartesianGrid strokeDasharray="3 3" />
@@ -203,10 +203,10 @@ export default function UsageCharts({ readings }) {
         </div>
       )}
 
-      {/* Pie chart — households only */}
+      {/* Pie chart — all meters */}
       {hasConsumptionData && (
         <div className="bg-white rounded-md p-4 border border-gray-200">
-          <h3 className="text-lg font-semibold mb-3">Consumption Share by Household</h3>
+          <h3 className="text-lg font-semibold mb-3">Consumption Share by Meter</h3>
           <ResponsiveContainer width="100%" height={260}>
             <PieChart>
               <Pie

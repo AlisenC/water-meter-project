@@ -1,9 +1,3 @@
-const CUBIC_FEET_TO_GALLONS = 7.48052;
-
-function toGallons(reading, unit) {
-  return unit === 1 ? reading * CUBIC_FEET_TO_GALLONS : reading;
-}
-
 function monthLabel(year, month) {
   return new Date(year, month - 1, 1).toLocaleDateString("en-AU", {
     month: "long",
@@ -12,35 +6,10 @@ function monthLabel(year, month) {
 }
 
 export default function DashboardSummary({
-  readings,
   anomalies = [],
   billingStatements = [],
   verificationData = [],
 }) {
-  const groups = {};
-  for (const r of readings) {
-    if (!groups[r.mi]) groups[r.mi] = [];
-    groups[r.mi].push(r);
-  }
-  for (const mi of Object.keys(groups)) {
-    groups[mi].sort((a, b) => new Date(a.record_date) - new Date(b.record_date));
-  }
-
-  let householdTotal = 0;
-  let mainTotal = 0;
-  for (const mi of Object.keys(groups)) {
-    const group = groups[mi];
-    for (let i = 1; i < group.length; i++) {
-      const prev = toGallons(group[i - 1].reading, group[i - 1].unit);
-      const curr = toGallons(group[i].reading, group[i].unit);
-      const delta = Math.max(0, curr - prev);
-      if (mi === "MAIN") mainTotal += delta;
-      else householdTotal += delta;
-    }
-  }
-  householdTotal = parseFloat(householdTotal.toFixed(2));
-  mainTotal = parseFloat(mainTotal.toFixed(2));
-
   const latestBilling = billingStatements.length > 0 ? billingStatements[0] : null;
   const latestVerification = latestBilling
     ? verificationData.find((v) => v.billing_statement_id === latestBilling.id)
@@ -96,12 +65,12 @@ export default function DashboardSummary({
       {/* Verification against main meter */}
       {latestVerification && (
         <div className={`mb-3 px-3 py-2 rounded border text-sm ${verifyColor}`}>
-          <p className="font-semibold mb-0.5">Main Meter Verification</p>
+          <p className="font-semibold mb-0.5">Household Sum Verification</p>
           {latestVerification.has_sufficient_readings ? (
             <>
               <p>
-                Main meter recorded:{" "}
-                <span className="font-mono">{latestVerification.main_meter_kl} kL</span>
+                Household sum:{" "}
+                <span className="font-mono">{latestVerification.household_sum_kl} kL</span>
               </p>
               <p>
                 Discrepancy:{" "}
@@ -116,22 +85,10 @@ export default function DashboardSummary({
               </p>
             </>
           ) : (
-            <p className="italic text-sm">Insufficient main meter readings for this billing period.</p>
+            <p className="italic text-sm">Insufficient household readings for this billing period.</p>
           )}
         </div>
       )}
-
-      {/* Secondary: calculated totals */}
-      <div className="flex gap-6 mb-2 text-sm text-gray-600">
-        <p>
-          Sub-meter Total:{" "}
-          <span className="font-mono font-semibold">{householdTotal} gal</span>
-        </p>
-        <p>
-          Main Meter (calculated):{" "}
-          <span className="font-mono font-semibold">{mainTotal} gal</span>
-        </p>
-      </div>
 
       {/* Spikes */}
       <div>

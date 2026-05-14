@@ -1,4 +1,4 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException, Header
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header
 import csv
 import os
 import base64
@@ -10,9 +10,11 @@ from .database import SessionLocal, engine
 from .models import Base, Reading, BillingStatement
 from datetime import datetime, date as date_type
 from pydantic import BaseModel
+from typing import Optional
 from collections import defaultdict
 from statistics import median
 from .ai_agent import router as ai_router
+from . import csv_parser
 import anthropic as anthropic_sdk
 
 GAP_MULTIPLIER = 1.5
@@ -104,25 +106,209 @@ async def import_csv(file: UploadFile = File(...)):
 
         try:
             parsed_date = datetime.strptime(row["record_date"], "%Y-%m-%d")
-
             reading = Reading(
                 mi=row["mi"],
                 reading=float(row["reading"]),
                 record_date=parsed_date,
                 unit=int(row["unit"])
             )
-
             db.add(reading)
             inserted += 1
-
         except Exception as e:
-            print("Skipping row:", row, e)
+            errors.append({"row_num": row_num, "reason": "parse_error", "raw_value": str(e)})
             skipped += 1
 
     db.commit()
     db.close()
 
     return {"inserted": inserted, "skipped": skipped, "errors": errors}
+
+class FilePreview(BaseModel):
+    filename: str
+    detected_format: str
+    total_rows: int
+    valid_rows: int
+    error_rows: int
+    rows_after_filter: int
+    households_found: list[str]
+    households_after_filter: list[str]
+    date_min: Optional[str]
+    date_max: Optional[str]
+    errors: list[dict]
+
+
+class ImportPreviewResponse(BaseModel):
+    files: list[FilePreview]
+    total_rows_to_import: int
+    total_errors: int
+    all_households: list[str]
+
+
+def _build_existing_units(db) -> dict[str, int]:
+    rows = db.query(Reading.mi, Reading.unit).distinct().all()
+    result = {}
+    for mi, unit in rows:
+        if mi not in result:
+            result[mi] = unit
+    return result
+
+
+def _parse_date_form(value: Optional[str]) -> Optional[date_type]:
+    if not value:
+        return None
+    try:
+        return date_type.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _build_file_preview(
+    file_bytes: bytes,
+    filename: str,
+    existing_units: dict[str, int],
+    date_start: Optional[date_type],
+    date_end: Optional[date_type],
+    exclude_households: list[str],
+    fmt_override: Optional[str],
+) -> FilePreview:
+    try:
+        fmt_key, valid_rows, error_rows = csv_parser.parse_csv_bytes(
+            file_bytes, filename, existing_units, fmt_override
+        )
+    except ValueError as e:
+        return FilePreview(
+            filename=filename,
+            detected_format="unknown",
+            total_rows=0,
+            valid_rows=0,
+            error_rows=1,
+            rows_after_filter=0,
+            households_found=[],
+            households_after_filter=[],
+            date_min=None,
+            date_max=None,
+            errors=[{"row_num": 0, "reason": "format_error", "raw_value": str(e), "filename": filename}],
+        )
+
+    included, _ = csv_parser.apply_filters(valid_rows, date_start, date_end, exclude_households)
+
+    households_found = sorted({r["mi"] for r in valid_rows})
+    households_after = sorted({r["mi"] for r in included})
+    dates = [r["record_date"] for r in valid_rows]
+    date_min = min(dates).isoformat() if dates else None
+    date_max = max(dates).isoformat() if dates else None
+
+    return FilePreview(
+        filename=filename,
+        detected_format=fmt_key,
+        total_rows=len(valid_rows) + len(error_rows),
+        valid_rows=len(valid_rows),
+        error_rows=len(error_rows),
+        rows_after_filter=len(included),
+        households_found=households_found,
+        households_after_filter=households_after,
+        date_min=date_min,
+        date_max=date_max,
+        errors=error_rows,
+    )
+
+
+@app.post("/import-csv/v2/preview")
+async def import_csv_v2_preview(
+    files: list[UploadFile] = File(...),
+    date_start: Optional[str] = Form(default=None),
+    date_end: Optional[str] = Form(default=None),
+    exclude_households: str = Form(default=""),
+    fmt_override: Optional[str] = Form(default=None),
+) -> ImportPreviewResponse:
+    db = SessionLocal()
+    existing_units = _build_existing_units(db)
+    db.close()
+
+    ds = _parse_date_form(date_start)
+    de = _parse_date_form(date_end)
+    exclusions = [h.strip() for h in exclude_households.split(",") if h.strip()]
+    override = fmt_override if fmt_override in ("A", "B", "C") else None
+
+    file_previews = []
+    for upload in files:
+        file_bytes = await upload.read()
+        fp = _build_file_preview(file_bytes, upload.filename, existing_units, ds, de, exclusions, override)
+        file_previews.append(fp)
+
+    all_households = sorted({h for fp in file_previews for h in fp.households_after_filter})
+    return ImportPreviewResponse(
+        files=file_previews,
+        total_rows_to_import=sum(fp.rows_after_filter for fp in file_previews),
+        total_errors=sum(fp.error_rows for fp in file_previews),
+        all_households=all_households,
+    )
+
+
+@app.post("/import-csv/v2/confirm")
+async def import_csv_v2_confirm(
+    files: list[UploadFile] = File(...),
+    date_start: Optional[str] = Form(default=None),
+    date_end: Optional[str] = Form(default=None),
+    exclude_households: str = Form(default=""),
+    fmt_override: Optional[str] = Form(default=None),
+):
+    db = SessionLocal()
+    existing_units = _build_existing_units(db)
+
+    ds = _parse_date_form(date_start)
+    de = _parse_date_form(date_end)
+    exclusions = [h.strip() for h in exclude_households.split(",") if h.strip()]
+    override = fmt_override if fmt_override in ("A", "B", "C") else None
+
+    total_inserted = 0
+    total_skipped = 0
+    all_errors: list[dict] = []
+    per_file = []
+
+    for upload in files:
+        file_bytes = await upload.read()
+        try:
+            _, valid_rows, error_rows = csv_parser.parse_csv_bytes(
+                file_bytes, upload.filename, existing_units, override
+            )
+        except ValueError as e:
+            err = {"row_num": 0, "reason": "format_error", "raw_value": str(e), "filename": upload.filename}
+            all_errors.append(err)
+            per_file.append({"filename": upload.filename, "inserted": 0, "skipped": 0})
+            continue
+
+        included, _ = csv_parser.apply_filters(valid_rows, ds, de, exclusions)
+        skipped = len(valid_rows) - len(included) + len(error_rows)
+
+        for row in included:
+            db.add(Reading(
+                mi=row["mi"],
+                reading=row["reading"],
+                record_date=datetime.combine(row["record_date"], datetime.min.time()),
+                unit=row["unit"],
+            ))
+
+        all_errors.extend(error_rows)
+        total_inserted += len(included)
+        total_skipped += skipped
+        per_file.append({"filename": upload.filename, "inserted": len(included), "skipped": skipped})
+
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        db.close()
+        raise HTTPException(status_code=500, detail=f"Database write failed: {e}")
+    db.close()
+
+    return {
+        "inserted": total_inserted,
+        "skipped": total_skipped,
+        "errors": all_errors,
+        "per_file": per_file,
+    }
+
 
 # Delete a reading
 @app.delete("/readings/{reading_id}")
@@ -309,7 +495,15 @@ async def delete_billing_statement(stmt_id: int):
     return {"ok": True}
 
 
-# Verify billing statements against main meter readings
+_GALLON_TO_KL = 0.00378541
+_CUFT_TO_KL = 0.0283168
+
+
+def _to_kl(reading: float, unit: int) -> float:
+    return reading * (_CUFT_TO_KL if unit == 1 else _GALLON_TO_KL)
+
+
+# Verify billing statements against summed household meter readings
 @app.get("/billing-verify")
 async def billing_verify():
     db = SessionLocal()
@@ -317,13 +511,13 @@ async def billing_verify():
         BillingStatement.billing_year,
         BillingStatement.billing_month,
     ).all()
-    main_readings = (
-        db.query(Reading)
-        .filter(Reading.mi == "MAIN", Reading.unit == 0)
-        .order_by(Reading.record_date)
-        .all()
-    )
+    all_readings = db.query(Reading).order_by(Reading.record_date).all()
     db.close()
+
+    # Group readings by household
+    by_mi: dict[str, list] = defaultdict(list)
+    for r in all_readings:
+        by_mi[r.mi].append(r)
 
     results = []
     for stmt in stmts:
@@ -336,17 +530,23 @@ async def billing_verify():
         else:
             period_end = date_type(end_year, end_month + 1, 1)
 
-        before_start = [r for r in main_readings if r.record_date.date() <= period_start]
-        before_end = [r for r in main_readings if r.record_date.date() < period_end]
+        household_sum_kl = 0.0
+        has_any_data = False
 
-        main_meter_kl = None
-        if before_start and before_end:
+        for readings in by_mi.values():
+            before_start = [r for r in readings if r.record_date.date() <= period_start]
+            before_end = [r for r in readings if r.record_date.date() < period_end]
+            if not before_start or not before_end:
+                continue
             baseline = before_start[-1]
             end_rdg = before_end[-1]
-            if baseline.id != end_rdg.id:
-                main_meter_kl = round(max(0.0, end_rdg.reading - baseline.reading), 3)
+            if baseline.id == end_rdg.id:
+                continue
+            household_sum_kl += max(0.0, _to_kl(end_rdg.reading, end_rdg.unit) - _to_kl(baseline.reading, baseline.unit))
+            has_any_data = True
 
-        discrepancy_kl = round(stmt.total_consumption_kl - main_meter_kl, 3) if main_meter_kl is not None else None
+        household_sum_kl = round(household_sum_kl, 3) if has_any_data else None
+        discrepancy_kl = round(stmt.total_consumption_kl - household_sum_kl, 3) if household_sum_kl is not None else None
 
         results.append({
             "billing_statement_id": stmt.id,
@@ -356,9 +556,9 @@ async def billing_verify():
             "period_end_year": end_year,
             "total_consumption_kl": stmt.total_consumption_kl,
             "billing_cost_aud": stmt.billing_cost_aud,
-            "main_meter_kl": main_meter_kl,
+            "household_sum_kl": household_sum_kl,
             "discrepancy_kl": discrepancy_kl,
-            "has_sufficient_readings": main_meter_kl is not None,
+            "has_sufficient_readings": has_any_data,
         })
 
     return results

@@ -104,19 +104,16 @@ async def import_csv(file: UploadFile = File(...)):
 
         try:
             parsed_date = datetime.strptime(row["record_date"], "%Y-%m-%d")
-
             reading = Reading(
                 mi=row["mi"],
                 reading=float(row["reading"]),
                 record_date=parsed_date,
                 unit=int(row["unit"])
             )
-
             db.add(reading)
             inserted += 1
-
         except Exception as e:
-            print("Skipping row:", row, e)
+            errors.append({"row_num": row_num, "reason": "parse_error", "raw_value": str(e)})
             skipped += 1
 
     db.commit()
@@ -295,7 +292,12 @@ async def import_csv_v2_confirm(
         total_skipped += skipped
         per_file.append({"filename": upload.filename, "inserted": len(included), "skipped": skipped})
 
-    db.commit()
+    try:
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        db.close()
+        raise HTTPException(status_code=500, detail=f"Database write failed: {e}")
     db.close()
 
     return {

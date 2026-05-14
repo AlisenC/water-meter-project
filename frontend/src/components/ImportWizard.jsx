@@ -294,12 +294,24 @@ export default function ImportWizard({ onImportSuccess, onClose }) {
                 </div>
               )}
 
+              {/* Format error banner */}
+              {previewData.files.some((fp) => fp.detected_format === "unknown") && (
+                <div className="bg-red-50 border border-red-200 rounded px-3 py-2 text-sm text-red-700">
+                  <strong>Format not recognised</strong> for{" "}
+                  {previewData.files.filter((fp) => fp.detected_format === "unknown").map((fp) => fp.filename).join(", ")}.
+                  {" "}Expected columns: <span className="font-mono">mi, reading, record_date, unit</span> (Format A) or{" "}
+                  <span className="font-mono">household, meter_value, date</span> (Format B) or{" "}
+                  tab-delimited <span className="font-mono">name, val, dt</span> (Format C).
+                  Go back and select the correct format.
+                </div>
+              )}
+
               {/* Per-file cards */}
               <div className="space-y-3">
                 {previewData.files.map((fp, i) => <FileCard key={i} fp={fp} />)}
               </div>
 
-              {previewData.total_rows_to_import === 0 && (
+              {previewData.total_rows_to_import === 0 && previewData.files.every((fp) => fp.detected_format !== "unknown") && (
                 <p className="text-amber-600 text-sm bg-amber-50 rounded px-3 py-2">
                   No rows would be imported with the current filters. Go back and adjust your settings.
                 </p>

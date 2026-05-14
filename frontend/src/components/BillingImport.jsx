@@ -110,7 +110,7 @@ export default function BillingImport({
                 <th className="px-3 py-2">Period</th>
                 <th className="px-3 py-2">Consumption (kL)</th>
                 <th className="px-3 py-2">Cost (AUD)</th>
-                <th className="px-3 py-2">Main Meter (kL)</th>
+                <th className="px-3 py-2">Household Sum (kL)</th>
                 <th className="px-3 py-2">Discrepancy</th>
                 <th className="px-3 py-2">File</th>
                 <th className="px-3 py-2"></th>
@@ -143,7 +143,7 @@ export default function BillingImport({
                     <td className="px-3 py-2 font-mono">${s.billing_cost_aud.toFixed(2)}</td>
                     <td className="px-3 py-2 font-mono text-gray-600">
                       {v?.has_sufficient_readings
-                        ? v.main_meter_kl
+                        ? v.household_sum_kl
                         : <span className="text-gray-400 italic">n/a</span>}
                     </td>
                     <td className={`px-3 py-2 font-mono ${discrepancyClass}`}>

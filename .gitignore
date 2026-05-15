@@ -14,3 +14,4 @@ backend/water_meter.db
 Thumbs.db
 .vscode/
 prompt.md
+.claude/

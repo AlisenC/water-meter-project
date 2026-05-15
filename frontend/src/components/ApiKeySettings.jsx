@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { KeyRound } from "lucide-react";
 
 const LS_KEY = "wm_api_key";
 const LS_PROVIDER = "wm_api_provider";
@@ -31,60 +32,77 @@ export default function ApiKeySettings({ apiKey, apiProvider, onSave, onClear })
   }
 
   return (
-    <div className={`mb-4 rounded-md border ${apiKey ? "border-green-200 bg-green-50" : "border-amber-200 bg-amber-50"}`}>
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="w-full flex justify-between items-center px-4 py-2 text-sm font-semibold text-left"
-      >
-        <span className={apiKey ? "text-green-800" : "text-amber-800"}>
-          {apiKey
-            ? `API key set — ${apiProvider === "openai" ? "OpenAI (GPT-4o)" : "Anthropic (Claude)"} · ${maskKey(apiKey)}`
-            : "API key required — configure to use PDF import and AI chat"}
-        </span>
-        <span className="text-gray-400 ml-2">{open ? "▲" : "▼"}</span>
-      </button>
-
-      {open && (
-        <div className="px-4 pb-4 space-y-3">
-          <p className="text-xs text-gray-500">
-            Your key is saved in this browser only and sent directly to the AI provider. It is never stored on the server.
-          </p>
-          <div className="flex flex-wrap gap-2 items-center">
-            <select
-              value={draftProvider}
-              onChange={(e) => setDraftProvider(e.target.value)}
-              className="border rounded px-2 py-1.5 text-sm bg-white"
-            >
-              <option value="anthropic">Anthropic (Claude)</option>
-              <option value="openai">OpenAI (GPT-4o)</option>
-            </select>
-            <input
-              type="password"
-              placeholder="Paste API key"
-              value={draftKey}
-              onChange={(e) => setDraftKey(e.target.value)}
-              onKeyDown={(e) => e.key === "Enter" && handleSave()}
-              className="border rounded px-2 py-1.5 text-sm font-mono w-72 bg-white"
-              autoComplete="off"
-            />
-            <button
-              onClick={handleSave}
-              disabled={!draftKey.trim()}
-              className="bg-blue-600 text-white px-4 py-1.5 text-sm rounded disabled:opacity-50 hover:bg-blue-700"
-            >
-              Save
-            </button>
-            {apiKey && (
-              <button
-                onClick={handleClear}
-                className="text-red-500 hover:text-red-700 text-sm underline"
-              >
-                Clear
-              </button>
-            )}
-          </div>
+    <div className="bg-white rounded-lg border border-gray-200 shadow-sm overflow-hidden">
+      {/* Header */}
+      <div className="px-5 py-3 bg-gray-50 border-b border-gray-200 flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <KeyRound size={16} className="text-blue-600" />
+          <h3 className="font-semibold text-gray-800 text-sm">AI Provider Settings</h3>
         </div>
-      )}
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className="text-xs text-blue-600 hover:text-blue-800 underline"
+        >
+          {open ? "Collapse" : "Edit"}
+        </button>
+      </div>
+
+      <div className="px-5 py-4">
+        {/* Status line */}
+        <div className="flex items-center gap-2 mb-4">
+          <span
+            className={`w-2 h-2 rounded-full flex-shrink-0 ${apiKey ? "bg-green-400" : "bg-amber-400"}`}
+          />
+          <span className={`text-sm font-medium ${apiKey ? "text-green-700" : "text-amber-700"}`}>
+            {apiKey
+              ? `${apiProvider === "openai" ? "OpenAI (GPT-4o)" : "Anthropic (Claude)"} · ${maskKey(apiKey)}`
+              : "No API key — configure to use PDF import and AI chat"}
+          </span>
+        </div>
+
+        {open && (
+          <div className="space-y-3">
+            <p className="text-xs text-gray-500 leading-relaxed">
+              Your key is stored in this browser only and sent directly to the AI provider. It is never
+              stored on the server.
+            </p>
+            <div className="flex flex-wrap gap-2 items-center">
+              <select
+                value={draftProvider}
+                onChange={(e) => setDraftProvider(e.target.value)}
+                className="border border-gray-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              >
+                <option value="anthropic">Anthropic (Claude)</option>
+                <option value="openai">OpenAI (GPT-4o)</option>
+              </select>
+              <input
+                type="password"
+                placeholder="Paste API key"
+                value={draftKey}
+                onChange={(e) => setDraftKey(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && handleSave()}
+                className="border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono w-72 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                autoComplete="off"
+              />
+              <button
+                onClick={handleSave}
+                disabled={!draftKey.trim()}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 text-sm font-medium rounded-lg disabled:opacity-50 transition-colors"
+              >
+                Save
+              </button>
+              {apiKey && (
+                <button
+                  onClick={handleClear}
+                  className="text-red-500 hover:text-red-700 text-sm underline"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

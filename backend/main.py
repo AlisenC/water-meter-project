@@ -14,6 +14,7 @@ from typing import Optional
 from collections import defaultdict
 from statistics import median
 from .ai_agent import router as ai_router
+from .oracle_ai import router as oracle_router
 from . import csv_parser
 import anthropic as anthropic_sdk
 
@@ -29,6 +30,9 @@ class ReadingCreate(BaseModel):
 
 # AI Agent Router
 app.include_router(ai_router, prefix="/ai")
+
+# Oracle 26ai Router
+app.include_router(oracle_router)
 
 # CORS
 _raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173")

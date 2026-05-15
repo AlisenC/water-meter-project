@@ -1,8 +1,33 @@
+import { TrendingUp, DollarSign, Zap } from "lucide-react";
+
 function monthLabel(year, month) {
   return new Date(year, month - 1, 1).toLocaleDateString("en-AU", {
     month: "long",
     year: "numeric",
   });
+}
+
+function StatCard({ icon: Icon, iconColor, label, value, sub, accent }) {
+  const accents = {
+    blue:   "border-t-blue-500",
+    indigo: "border-t-indigo-500",
+    green:  "border-t-green-500",
+    orange: "border-t-orange-500",
+  };
+  return (
+    <div className={`bg-white rounded-xl border border-gray-200 shadow-sm pt-0 overflow-hidden border-t-4 ${accents[accent] ?? accents.blue}`}>
+      <div className="px-5 py-4">
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">{label}</p>
+          <div className={`p-2 rounded-lg ${iconColor}`}>
+            <Icon size={15} />
+          </div>
+        </div>
+        <p className="text-2xl font-bold text-gray-900 font-mono">{value}</p>
+        {sub && <p className="text-xs text-gray-400 mt-1">{sub}</p>}
+      </div>
+    </div>
+  );
 }
 
 export default function DashboardSummary({
@@ -28,104 +53,110 @@ export default function DashboardSummary({
       })()
     : null;
 
-  const verifyColor =
-    !latestVerification || !latestVerification.has_sufficient_readings
-      ? "bg-gray-50 border-gray-200 text-gray-500"
-      : Math.abs(latestVerification.discrepancy_kl) < 0.5
-      ? "bg-green-50 border-green-200 text-green-800"
-      : "bg-orange-50 border-orange-300 text-orange-800";
+  const spikeCount = anomalies.length;
+  const spikeAccent = spikeCount === 0 ? "green" : "orange";
+
+  const verifyOk =
+    latestVerification?.has_sufficient_readings &&
+    Math.abs(latestVerification.discrepancy_kl) < 0.5;
+  const verifyStyles = !latestVerification || !latestVerification.has_sufficient_readings
+    ? "bg-gray-50 border-gray-200 text-gray-500"
+    : verifyOk
+    ? "bg-green-50 border-green-200 text-green-800"
+    : "bg-orange-50 border-orange-300 text-orange-800";
 
   return (
-    <div className="p-4 bg-blue-50 rounded-md mb-4">
-      <h2 className="text-xl font-bold mb-3">Summary</h2>
+    <div className="space-y-6">
+      {/* Stat card grid */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <StatCard
+          icon={TrendingUp}
+          iconColor="bg-blue-100 text-blue-600"
+          label="Latest Consumption"
+          value={latestBilling ? `${latestBilling.total_consumption_kl.toFixed(3)} kL` : "—"}
+          sub={billingPeriodLabel ?? "No statement imported"}
+          accent="blue"
+        />
+        <StatCard
+          icon={DollarSign}
+          iconColor="bg-indigo-100 text-indigo-600"
+          label="Billing Cost"
+          value={latestBilling ? `$${latestBilling.billing_cost_aud.toFixed(2)}` : "—"}
+          sub={latestBilling ? "AUD" : "No statement imported"}
+          accent="indigo"
+        />
+        <StatCard
+          icon={Zap}
+          iconColor={spikeCount === 0 ? "bg-green-100 text-green-600" : "bg-orange-100 text-orange-600"}
+          label="Usage Spikes"
+          value={spikeCount === 0 ? "None" : String(spikeCount)}
+          sub={spikeCount === 0 ? "No anomalies detected" : `${spikeCount} anomal${spikeCount === 1 ? "y" : "ies"} detected`}
+          accent={spikeAccent}
+        />
+      </div>
 
-      {/* Primary: Billing Statement */}
-      {latestBilling ? (
-        <div className="mb-3">
-          <p className="text-xs text-gray-500 uppercase tracking-wide font-semibold mb-1">
-            Billing Statement — {billingPeriodLabel}
-          </p>
-          <p className="text-3xl font-mono font-bold text-blue-700">
-            {latestBilling.total_consumption_kl.toFixed(3)} kL
-          </p>
-          <p className="text-sm text-gray-600 mt-0.5">
-            Cost:{" "}
-            <span className="font-mono font-semibold">
-              ${latestBilling.billing_cost_aud.toFixed(2)} AUD
-            </span>
-            {latestBilling.source_filename && (
-              <span className="text-gray-400 ml-2 text-xs">{latestBilling.source_filename}</span>
-            )}
-          </p>
-        </div>
-      ) : (
-        <p className="text-gray-400 italic text-sm mb-3">No billing statement imported yet.</p>
-      )}
-
-      {/* Verification against main meter */}
+      {/* Verification strip */}
       {latestVerification && (
-        <div className={`mb-3 px-3 py-2 rounded border text-sm ${verifyColor}`}>
-          <p className="font-semibold mb-0.5">Household Sum Verification</p>
+        <div className={`rounded-lg border px-5 py-4 text-sm ${verifyStyles}`}>
+          <p className="font-semibold mb-1">Household Sum Verification</p>
           {latestVerification.has_sufficient_readings ? (
-            <>
-              <p>
+            <div className="flex flex-wrap gap-6">
+              <span>
                 Household sum:{" "}
-                <span className="font-mono">{latestVerification.household_sum_kl} kL</span>
-              </p>
-              <p>
+                <span className="font-mono font-semibold">{latestVerification.household_sum_kl} kL</span>
+              </span>
+              <span>
                 Discrepancy:{" "}
                 <span className="font-mono font-semibold">
                   {latestVerification.discrepancy_kl > 0 ? "+" : ""}
                   {latestVerification.discrepancy_kl} kL
                 </span>
-                {" — "}
-                {Math.abs(latestVerification.discrepancy_kl) < 0.5
-                  ? "readings match statement"
-                  : "readings differ from statement"}
-              </p>
-            </>
+                {" · "}
+                {verifyOk ? "readings match statement" : "readings differ from statement"}
+              </span>
+            </div>
           ) : (
             <p className="italic text-sm">Insufficient household readings for this billing period.</p>
           )}
         </div>
       )}
 
-      {/* Spikes */}
-      <div>
-        <p className="font-semibold mb-1">
-          Spikes:{" "}
-          {anomalies.length === 0 && (
-            <span className="text-green-600 font-normal">None detected</span>
-          )}
-        </p>
-        {anomalies.length > 0 && (
-          <ul className="space-y-1">
+      {/* Spike detail cards */}
+      {anomalies.length > 0 && (
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="px-5 py-3 bg-gray-50 border-b border-gray-200">
+            <h3 className="text-sm font-semibold text-gray-700">Spike Details</h3>
+          </div>
+          <ul className="divide-y divide-gray-100">
             {anomalies.map((a, i) => (
-              <li
-                key={i}
-                className={`text-sm px-2 py-1 rounded border ${
-                  a.is_gap_induced
-                    ? "bg-yellow-50 text-yellow-800 border-yellow-300"
-                    : "bg-orange-50 text-orange-800 border-orange-300"
-                }`}
-              >
-                <span className="font-semibold">{a.household}</span>
-                {" — "}
-                {a.increase_percent}% spike on{" "}
-                {new Date(a.reading_date).toLocaleDateString("en-AU", {
-                  month: "short",
-                  year: "numeric",
-                })}
-                {a.is_gap_induced && (
-                  <span className="ml-2 text-xs italic">
-                    (gap-induced: {a.gap_days}d gap vs {a.median_interval_days}d median)
+              <li key={i} className="px-5 py-3 flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm font-semibold text-gray-900">{a.household}</p>
+                  {a.is_gap_induced && (
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      Gap-induced: {a.gap_days}d gap vs {a.median_interval_days}d median
+                    </p>
+                  )}
+                </div>
+                <div className="flex items-center gap-3 flex-shrink-0">
+                  <span className="text-xs text-gray-500">
+                    {new Date(a.reading_date).toLocaleDateString("en-AU", { month: "short", year: "numeric" })}
                   </span>
-                )}
+                  <span
+                    className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
+                      a.is_gap_induced
+                        ? "bg-yellow-100 text-yellow-700"
+                        : "bg-orange-100 text-orange-700"
+                    }`}
+                  >
+                    +{a.increase_percent}%
+                  </span>
+                </div>
               </li>
             ))}
           </ul>
-        )}
-      </div>
+        </div>
+      )}
     </div>
   );
 }

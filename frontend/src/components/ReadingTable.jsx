@@ -1,88 +1,179 @@
 import { useState } from "react";
+import { toast } from "react-hot-toast";
 import { api } from "../api";
+import { Search, Download } from "lucide-react";
+
+function exportCSV(rows, filename) {
+  if (!rows.length) return;
+  const headers = Object.keys(rows[0]).join(",");
+  const lines = rows.map((r) =>
+    Object.values(r)
+      .map((v) => (typeof v === "string" && v.includes(",") ? `"${v}"` : v))
+      .join(",")
+  );
+  const blob = new Blob([[headers, ...lines].join("\n")], { type: "text/csv" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 export default function ReadingTable({ readings, setReadings }) {
   const [mi, setMi] = useState("");
   const [reading, setReading] = useState("");
+  const [filterText, setFilterText] = useState("");
 
-  const handleSubmit = async (e) => {
+  const sorted = [...readings].sort(
+    (a, b) => new Date(b.record_date) - new Date(a.record_date)
+  );
+  const filtered = filterText
+    ? sorted.filter((r) => r.mi.toLowerCase().includes(filterText.toLowerCase()))
+    : sorted;
+
+  async function handleSubmit(e) {
     e.preventDefault();
     if (!mi || !reading) return;
     try {
-      const response = await api.post("/readings", {
-        mi,
-        reading: parseFloat(reading),
-      });
-      setReadings([...readings, response.data]);
+      const res = await api.post("/readings", { mi, reading: parseFloat(reading) });
+      setReadings([...readings, res.data]);
       setMi("");
       setReading("");
-    } catch (error) {
-      console.error("Error creating reading:", error);
+    } catch (err) {
+      toast.error(err.response?.data?.detail ?? "Failed to add reading.");
     }
-  };
+  }
 
-  const handleDelete = async (id) => {
+  async function handleDelete(id) {
     try {
       await api.delete(`/readings/${id}`);
       setReadings(readings.filter((r) => r.id !== id));
-    } catch (error) {
-      console.error("Error deleting reading:", error);
+    } catch (err) {
+      toast.error(err.response?.data?.detail ?? "Failed to delete reading.");
     }
-  };
+  }
 
   return (
-    <div>
-      <form onSubmit={handleSubmit} className="mb-4 flex gap-2">
-        <input
-          className="border p-2"
-          value={mi}
-          onChange={(e) => setMi(e.target.value)}
-          placeholder="Household"
-        />
-        <input
-          className="border p-2"
-          type="number"
-          value={reading}
-          onChange={(e) => setReading(e.target.value)}
-          placeholder="Water usage"
-        />
-        <button className="bg-blue-500 text-white px-4 py-2">Add</button>
-      </form>
+    <div className="space-y-4">
+      {/* Add Reading form */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+        <h3 className="text-sm font-semibold text-gray-700 mb-3">Add Reading</h3>
+        <form onSubmit={handleSubmit} className="flex flex-wrap gap-2 items-end">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-gray-500">Household</label>
+            <input
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent w-44"
+              value={mi}
+              onChange={(e) => setMi(e.target.value)}
+              placeholder="e.g. Unit 1"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs text-gray-500">Reading (kL)</label>
+            <input
+              className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent w-32"
+              type="number"
+              step="any"
+              value={reading}
+              onChange={(e) => setReading(e.target.value)}
+              placeholder="0.000"
+            />
+          </div>
+          <button
+            type="submit"
+            disabled={!mi || !reading}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-medium disabled:opacity-50 transition-colors"
+          >
+            Add
+          </button>
+        </form>
+      </div>
 
-      <table className="table-auto w-full border-collapse border border-gray-300">
-        <thead>
-          <tr>
-            <th className="border px-2 py-1">Household</th>
-            <th className="border px-2 py-1">Meter Reading</th>
-            <th className="border px-2 py-1">Date</th>
-            <th className="border px-2 py-1">Unit</th>
-            <th className="border px-2 py-1"></th>
-          </tr>
-        </thead>
-        <tbody>
-          {[...readings]
-            .sort((a, b) => new Date(b.record_date) - new Date(a.record_date))
-            .map((r) => (
-              <tr key={r.id}>
-                <td className="border px-2 py-1">{r.mi}</td>
-                <td className="border px-2 py-1">{r.reading}</td>
-                <td className="border px-2 py-1">
-                  {new Date(r.record_date).toLocaleDateString("en-AU", { month: "short", year: "numeric" })}
-                </td>
-                <td className="border px-2 py-1">{r.unit}</td>
-                <td className="border px-2 py-1 text-center">
-                  <button
-                    onClick={() => handleDelete(r.id)}
-                    className="text-red-500 hover:text-red-700 font-bold leading-none"
-                    title="Delete row"
-                  >
-                    ×
-                  </button>
-                </td>
-              </tr>
-            ))}
-        </tbody>
-      </table>
+      {/* Table card */}
+      <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+        {/* Toolbar */}
+        <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between gap-3">
+          <div className="relative flex-1 max-w-xs">
+            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+            <input
+              className="w-full pl-8 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              value={filterText}
+              onChange={(e) => setFilterText(e.target.value)}
+              placeholder="Filter by household…"
+            />
+          </div>
+          <button
+            onClick={() =>
+              exportCSV(
+                filtered.map((r) => ({
+                  household: r.mi,
+                  reading_kl: r.reading,
+                  date: new Date(r.record_date).toLocaleDateString("en-AU"),
+                  unit: r.unit,
+                })),
+                "readings.csv"
+              )
+            }
+            disabled={filtered.length === 0}
+            className="flex items-center gap-1.5 text-xs font-medium text-gray-600 hover:text-gray-900 border border-gray-200 hover:border-gray-300 px-3 py-2 rounded-lg disabled:opacity-40 transition-colors"
+          >
+            <Download size={13} />
+            Export CSV
+          </button>
+        </div>
+
+        {filtered.length === 0 ? (
+          <p className="px-5 py-8 text-sm text-gray-400 italic text-center">
+            {filterText ? "No readings match your filter." : "No readings yet."}
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-left text-gray-500 border-b border-gray-100 bg-gray-50">
+                  <th className="px-5 py-2.5 text-xs font-semibold uppercase tracking-wider">Household</th>
+                  <th className="px-5 py-2.5 text-xs font-semibold uppercase tracking-wider">Reading (kL)</th>
+                  <th className="px-5 py-2.5 text-xs font-semibold uppercase tracking-wider">Date</th>
+                  <th className="px-5 py-2.5 text-xs font-semibold uppercase tracking-wider">Unit</th>
+                  <th className="px-5 py-2.5" />
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-50">
+                {filtered.map((r) => (
+                  <tr key={r.id} className="hover:bg-blue-50 transition-colors">
+                    <td className="px-5 py-3 font-medium text-gray-900">{r.mi}</td>
+                    <td className="px-5 py-3 font-mono text-gray-700">{r.reading}</td>
+                    <td className="px-5 py-3 text-gray-500">
+                      {new Date(r.record_date).toLocaleDateString("en-AU", {
+                        month: "short",
+                        year: "numeric",
+                      })}
+                    </td>
+                    <td className="px-5 py-3 text-gray-500">{r.unit}</td>
+                    <td className="px-5 py-3 text-right">
+                      <button
+                        onClick={() => handleDelete(r.id)}
+                        className="text-gray-300 hover:text-red-500 transition-colors text-lg leading-none font-bold"
+                        title="Delete reading"
+                      >
+                        ×
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {filtered.length > 0 && (
+          <div className="px-5 py-2 border-t border-gray-100 bg-gray-50 text-xs text-gray-400">
+            {filtered.length} reading{filtered.length !== 1 ? "s" : ""}
+            {filterText && readings.length !== filtered.length && ` (filtered from ${readings.length})`}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

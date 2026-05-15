@@ -13,3 +13,4 @@ backend/water_meter.db
 .DS_Store
 Thumbs.db
 .vscode/
+prompt.md

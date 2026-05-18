@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Toaster } from "react-hot-toast";
 import { api } from "./api";
-import AIChat from "./components/AIChat";
+import AIAssistant from "./components/AIAssistant";
 import ReadingTable from "./components/ReadingTable";
 import DashboardSummary from "./components/DashboardSummary";
 import UsageCharts from "./components/UsageCharts";
@@ -10,11 +10,13 @@ import BillingImport from "./components/BillingImport";
 import ApiKeySettings from "./components/ApiKeySettings";
 import ImportWizard from "./components/ImportWizard";
 import Sidebar from "./components/Sidebar";
-import OracleAI from "./components/OracleAI";
 import OracleSettings from "./components/OracleSettings";
 
 const LS_KEY = "wm_api_key";
 const LS_PROVIDER = "wm_api_provider";
+const LS_ORACLE_DSN = "wm_oracle_dsn";
+const LS_ORACLE_USER = "wm_oracle_user";
+const LS_ORACLE_PASSWORD = "wm_oracle_password";
 
 const SECTIONS = {
   overview: {
@@ -33,13 +35,9 @@ const SECTIONS = {
     title: "Readings",
     description: "Search, filter, and manage individual meter readings.",
   },
-  oracle: {
-    title: "Oracle AI",
-    description: "Query your data with natural language and semantic vector search powered by Oracle 26ai.",
-  },
   ai: {
-    title: "Ask AI",
-    description: "Chat with AI about your water usage data.",
+    title: "AI Assistant",
+    description: "Chat with AI, query Oracle with natural language, or run semantic vector search.",
   },
   settings: {
     title: "Settings",
@@ -61,6 +59,9 @@ function App() {
   const [activeSection, setActiveSection] = useState("overview");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [oracleStatus, setOracleStatus] = useState(null);
+  const [oracleDsn, setOracleDsn] = useState(() => localStorage.getItem(LS_ORACLE_DSN) || "");
+  const [oracleUser, setOracleUser] = useState(() => localStorage.getItem(LS_ORACLE_USER) || "");
+  const [oraclePassword, setOraclePassword] = useState(() => localStorage.getItem(LS_ORACLE_PASSWORD) || "");
 
   useEffect(() => {
     Promise.all([
@@ -77,8 +78,17 @@ function App() {
   }, []);
 
   const checkOracleStatus = useCallback(async () => {
+    const dsn = localStorage.getItem(LS_ORACLE_DSN) || "";
+    const user = localStorage.getItem(LS_ORACLE_USER) || "";
+    const password = localStorage.getItem(LS_ORACLE_PASSWORD) || "";
     try {
-      const res = await api.get("/oracle/status");
+      const res = await api.get("/oracle/status", {
+        headers: {
+          ...(dsn && { "X-Oracle-Dsn": dsn }),
+          ...(user && { "X-Oracle-User": user }),
+          ...(password && { "X-Oracle-Password": password }),
+        },
+      });
       setOracleStatus(res.data);
     } catch {
       setOracleStatus({ connected: false, error: "Backend unreachable" });
@@ -90,6 +100,12 @@ function App() {
     const id = setInterval(checkOracleStatus, 30_000);
     return () => clearInterval(id);
   }, [checkOracleStatus]);
+
+  function handleCredentialsChange(dsn, user, password) {
+    setOracleDsn(dsn);
+    setOracleUser(user);
+    setOraclePassword(password);
+  }
 
   async function refreshBillingData() {
     const [billingsRes, verifyRes] = await Promise.all([
@@ -143,27 +159,9 @@ function App() {
 
       <div className="flex-1 flex flex-col overflow-hidden">
         {/* Topbar */}
-        <header className="bg-white border-b border-gray-200 px-6 py-4 flex-shrink-0 flex items-center justify-between gap-4">
-          <div className="min-w-0">
-            <h1 className="text-xl font-bold text-gray-900 truncate">{section.title}</h1>
-            <p className="text-sm text-gray-500 mt-0.5 truncate">{section.description}</p>
-          </div>
-          <button
-            onClick={() => setActiveSection("oracle")}
-            title="Oracle 26ai — click to open Oracle AI"
-            className={`flex items-center gap-2 text-xs px-3 py-1.5 rounded-full border flex-shrink-0 transition-colors ${
-              oracleStatus?.connected
-                ? "border-green-200 bg-green-50 text-green-700 hover:bg-green-100"
-                : "border-gray-200 bg-white text-gray-400 hover:bg-gray-50"
-            }`}
-          >
-            <span
-              className={`w-2 h-2 rounded-full ${
-                oracleStatus?.connected ? "bg-green-400" : "bg-gray-300"
-              }`}
-            />
-            Oracle 26ai
-          </button>
+        <header className="bg-white border-b border-gray-200 px-6 py-4 flex-shrink-0">
+          <h1 className="text-xl font-bold text-gray-900 truncate">{section.title}</h1>
+          <p className="text-sm text-gray-500 mt-0.5 truncate">{section.description}</p>
         </header>
 
         {/* Scrollable content */}
@@ -206,17 +204,16 @@ function App() {
             <ReadingTable readings={readings} setReadings={setReadings} />
           )}
 
-          {activeSection === "oracle" && (
-            <OracleAI
+          {activeSection === "ai" && (
+            <AIAssistant
               oracleStatus={oracleStatus}
               apiKey={apiKey}
               apiProvider={apiProvider}
+              oracleDsn={oracleDsn}
+              oracleUser={oracleUser}
+              oraclePassword={oraclePassword}
               onNavigateSettings={() => setActiveSection("settings")}
             />
-          )}
-
-          {activeSection === "ai" && (
-            <AIChat apiKey={apiKey} apiProvider={apiProvider} />
           )}
 
           {activeSection === "settings" && (
@@ -236,8 +233,12 @@ function App() {
               <OracleSettings
                 oracleStatus={oracleStatus}
                 onStatusRefresh={checkOracleStatus}
+                onCredentialsChange={handleCredentialsChange}
                 apiKey={apiKey}
                 apiProvider={apiProvider}
+                oracleDsn={oracleDsn}
+                oracleUser={oracleUser}
+                oraclePassword={oraclePassword}
               />
             </div>
           )}

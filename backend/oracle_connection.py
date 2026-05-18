@@ -38,12 +38,43 @@ def _get_pool():
     return _pool
 
 
-def is_connected() -> tuple[bool, str | None]:
-    """Returns (connected: bool, error: str | None)."""
+@contextlib.contextmanager
+def get_connection_with_creds(dsn: str, user: str, password: str):
+    """Direct (non-pooled) connection using caller-supplied credentials."""
+    if not _ORACLE_AVAILABLE:
+        raise RuntimeError("oracledb package not installed on server")
+    conn = oracledb.connect(user=user, password=password, dsn=dsn)
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def is_connected(
+    dsn: str | None = None,
+    user: str | None = None,
+    password: str | None = None,
+) -> tuple[bool, str | None]:
+    """Returns (connected, error).
+
+    If dsn/user/password are all provided, tests with those credentials directly.
+    Otherwise falls back to the server-side env-var pool.
+    """
     if not _ORACLE_AVAILABLE:
         return False, "oracledb package not installed on server"
+
+    if dsn and user and password:
+        try:
+            with get_connection_with_creds(dsn, user, password) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 'ok' FROM DUAL")
+                    cur.fetchone()
+            return True, None
+        except Exception as exc:
+            return False, str(exc)
+
     if not _env_configured():
-        return False, "Oracle env vars not set (ORACLE_DSN, ORACLE_USER, ORACLE_PASSWORD)"
+        return False, "Oracle not configured — enter credentials in Settings or set server env vars"
     try:
         pool = _get_pool()
         with pool.acquire() as conn:
@@ -56,8 +87,20 @@ def is_connected() -> tuple[bool, str | None]:
 
 
 @contextlib.contextmanager
-def get_connection():
-    """Context manager yielding a pooled Oracle connection."""
-    pool = _get_pool()
-    with pool.acquire() as conn:
-        yield conn
+def get_connection(
+    dsn: str | None = None,
+    user: str | None = None,
+    password: str | None = None,
+):
+    """Context manager yielding an Oracle connection.
+
+    Uses caller-supplied credentials when all three are provided;
+    otherwise uses the env-var pool.
+    """
+    if dsn and user and password:
+        with get_connection_with_creds(dsn, user, password) as conn:
+            yield conn
+    else:
+        pool = _get_pool()
+        with pool.acquire() as conn:
+            yield conn

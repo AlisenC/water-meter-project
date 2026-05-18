@@ -1,11 +1,17 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { api } from "../api";
-import { Database, Search, MessageSquare, AlertCircle, CheckCircle2, ChevronDown, ChevronUp } from "lucide-react";
+import {
+  MessageSquare, Database, Search,
+  Send, ChevronDown, ChevronUp,
+  CheckCircle2, AlertCircle,
+} from "lucide-react";
+
+// ─── Oracle connection banner (shown on Oracle tabs only) ─────────────────── //
 
 function ConnectionBanner({ status, onNavigateSettings }) {
   if (!status) {
     return (
-      <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-gray-100 text-gray-500 text-sm mb-6">
+      <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-gray-100 text-gray-500 text-sm mb-5">
         <div className="w-2 h-2 rounded-full bg-gray-400 animate-pulse" />
         Checking Oracle connection…
       </div>
@@ -14,26 +20,24 @@ function ConnectionBanner({ status, onNavigateSettings }) {
 
   if (status.connected) {
     return (
-      <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-green-50 border border-green-200 text-green-800 text-sm mb-6">
+      <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-green-50 border border-green-200 text-green-800 text-sm mb-5">
         <CheckCircle2 size={16} className="flex-shrink-0" />
         <span>
           Connected to Oracle 26ai
-          {status.version && (
-            <span className="text-green-600 ml-1">· v{status.version}</span>
-          )}
+          {status.version && <span className="text-green-600 ml-1">· v{status.version}</span>}
         </span>
       </div>
     );
   }
 
   return (
-    <div className="rounded-lg bg-amber-50 border border-amber-200 p-4 mb-6">
+    <div className="rounded-lg bg-amber-50 border border-amber-200 p-4 mb-5">
       <div className="flex items-start gap-3">
         <AlertCircle size={18} className="text-amber-500 flex-shrink-0 mt-0.5" />
         <div className="flex-1">
           <p className="font-semibold text-amber-800 text-sm">Oracle 26ai not connected</p>
           <p className="text-amber-700 text-xs mt-0.5">
-            {status.error ?? "Configure Oracle connection details to enable these features."}
+            {status.error ?? "Configure Oracle credentials in Settings to enable these features."}
           </p>
           <button
             onClick={onNavigateSettings}
@@ -47,11 +51,146 @@ function ConnectionBanner({ status, onNavigateSettings }) {
   );
 }
 
-function AskOracle({ apiKey, apiProvider, disabled }) {
+// ─── Chat pane ────────────────────────────────────────────────────────────── //
+
+function ChatPane({ apiKey, apiProvider }) {
+  const [messages, setMessages] = useState([]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const bottomRef = useRef(null);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
+
+  async function send() {
+    const q = input.trim();
+    if (!q || loading) return;
+
+    if (!apiKey) {
+      setMessages((prev) => [
+        ...prev,
+        { role: "user", text: q },
+        { role: "error", text: "No API key configured — add one in Settings." },
+      ]);
+      setInput("");
+      return;
+    }
+
+    setMessages((prev) => [...prev, { role: "user", text: q }]);
+    setInput("");
+    setLoading(true);
+
+    try {
+      const res = await api.post(
+        "/ai/ask",
+        { question: q },
+        { headers: { "X-Api-Key": apiKey, "X-Api-Provider": apiProvider } }
+      );
+      const text = res.data.error ?? res.data.answer ?? "No response.";
+      setMessages((prev) => [...prev, { role: res.data.error ? "error" : "ai", text }]);
+    } catch (err) {
+      setMessages((prev) => [
+        ...prev,
+        { role: "error", text: err.response?.data?.detail ?? "Request failed." },
+      ]);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  return (
+    <div
+      className="flex flex-col bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden"
+      style={{ minHeight: "480px" }}
+    >
+      <div className="flex-1 overflow-y-auto px-5 py-5 space-y-4">
+        {messages.length === 0 && (
+          <div className="h-full flex flex-col items-center justify-center text-center text-gray-400 gap-2 py-16">
+            <p className="text-sm font-medium">Ask anything about your water usage data</p>
+            <p className="text-xs">e.g. "Which household used the most water last quarter?"</p>
+          </div>
+        )}
+        {messages.map((m, i) => {
+          if (m.role === "user") {
+            return (
+              <div key={i} className="flex justify-end">
+                <div className="bg-blue-600 text-white rounded-2xl rounded-tr-sm px-4 py-2.5 text-sm max-w-[75%] leading-relaxed">
+                  {m.text}
+                </div>
+              </div>
+            );
+          }
+          if (m.role === "error") {
+            return (
+              <div key={i} className="flex justify-start">
+                <div className="bg-red-50 border border-red-200 text-red-700 rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm max-w-[75%] leading-relaxed">
+                  {m.text}
+                </div>
+              </div>
+            );
+          }
+          return (
+            <div key={i} className="flex justify-start">
+              <div className="bg-gray-50 border border-gray-200 text-gray-800 rounded-2xl rounded-tl-sm px-4 py-2.5 text-sm max-w-[75%] leading-relaxed whitespace-pre-wrap">
+                {m.text}
+              </div>
+            </div>
+          );
+        })}
+        {loading && (
+          <div className="flex justify-start">
+            <div className="bg-gray-50 border border-gray-200 rounded-2xl rounded-tl-sm px-4 py-3 flex gap-1">
+              {[0, 1, 2].map((i) => (
+                <span
+                  key={i}
+                  className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"
+                  style={{ animationDelay: `${i * 0.15}s` }}
+                />
+              ))}
+            </div>
+          </div>
+        )}
+        <div ref={bottomRef} />
+      </div>
+      <div className="border-t border-gray-100 px-4 py-3 flex gap-3 bg-white">
+        <input
+          className="flex-1 border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => e.key === "Enter" && !e.shiftKey && send()}
+          placeholder={apiKey ? "Ask about your water usage…" : "Add an API key in Settings to chat"}
+          disabled={loading}
+        />
+        <button
+          onClick={send}
+          disabled={loading || !input.trim()}
+          className="bg-blue-600 hover:bg-blue-700 text-white p-2.5 rounded-xl disabled:opacity-40 transition-colors flex-shrink-0"
+        >
+          <Send size={16} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Ask Oracle pane (NL2SQL) ─────────────────────────────────────────────── //
+
+function AskOracle({ apiKey, apiProvider, oracleDsn, oracleUser, oraclePassword, disabled }) {
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
   const [sqlOpen, setSqlOpen] = useState(false);
+
+  function oracleHeaders() {
+    return {
+      "X-Api-Key": apiKey,
+      "X-Api-Provider": apiProvider,
+      ...(oracleDsn && { "X-Oracle-Dsn": oracleDsn }),
+      ...(oracleUser && { "X-Oracle-User": oracleUser }),
+      ...(oraclePassword && { "X-Oracle-Password": oraclePassword }),
+    };
+  }
 
   async function submit() {
     const q = question.trim();
@@ -59,11 +198,7 @@ function AskOracle({ apiKey, apiProvider, disabled }) {
     setLoading(true);
     setResult(null);
     try {
-      const res = await api.post(
-        "/oracle/ask",
-        { question: q },
-        { headers: { "X-Api-Key": apiKey, "X-Api-Provider": apiProvider } }
-      );
+      const res = await api.post("/oracle/ask", { question: q }, { headers: oracleHeaders() });
       setResult(res.data);
     } catch (err) {
       setResult({ error: err.response?.data?.detail ?? "Request failed." });
@@ -99,13 +234,11 @@ function AskOracle({ apiKey, apiProvider, disabled }) {
               {result.error}
             </div>
           )}
-
           {result.answer && (
             <div className="bg-blue-50 border border-blue-200 rounded-lg px-4 py-3 text-sm text-blue-900 leading-relaxed">
               {result.answer}
             </div>
           )}
-
           {result.sql && (
             <div className="border border-gray-200 rounded-lg overflow-hidden">
               <button
@@ -122,7 +255,6 @@ function AskOracle({ apiKey, apiProvider, disabled }) {
               )}
             </div>
           )}
-
           {result.result && result.result.length > 0 && (
             <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
               <div className="px-4 py-2 bg-gray-50 border-b text-xs font-semibold text-gray-500 uppercase tracking-wide">
@@ -160,12 +292,24 @@ function AskOracle({ apiKey, apiProvider, disabled }) {
   );
 }
 
-function VectorSearch({ apiKey, apiProvider, disabled }) {
+// ─── Semantic Search pane ─────────────────────────────────────────────────── //
+
+function VectorSearch({ apiKey, apiProvider, oracleDsn, oracleUser, oraclePassword, disabled }) {
   const [query, setQuery] = useState("");
   const [topK, setTopK] = useState(5);
   const [loading, setLoading] = useState(false);
   const [results, setResults] = useState(null);
   const [error, setError] = useState(null);
+
+  function oracleHeaders() {
+    return {
+      "X-Api-Key": apiKey,
+      "X-Api-Provider": apiProvider,
+      ...(oracleDsn && { "X-Oracle-Dsn": oracleDsn }),
+      ...(oracleUser && { "X-Oracle-User": oracleUser }),
+      ...(oraclePassword && { "X-Oracle-Password": oraclePassword }),
+    };
+  }
 
   async function submit() {
     const q = query.trim();
@@ -177,7 +321,7 @@ function VectorSearch({ apiKey, apiProvider, disabled }) {
       const res = await api.post(
         "/oracle/vector-search",
         { query: q, top_k: topK },
-        { headers: { "X-Api-Key": apiKey, "X-Api-Provider": apiProvider } }
+        { headers: oracleHeaders() }
       );
       setResults(res.data.results);
     } catch (err) {
@@ -193,7 +337,6 @@ function VectorSearch({ apiKey, apiProvider, disabled }) {
         Find meter readings semantically similar to your query using Oracle 26ai vector embeddings.
         Requires embeddings to be generated first — use the Sync tool in Settings.
       </p>
-
       <div className="flex gap-3">
         <input
           className="flex-1 border border-gray-300 rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-50 disabled:text-gray-400"
@@ -227,13 +370,11 @@ function VectorSearch({ apiKey, apiProvider, disabled }) {
           {error}
         </div>
       )}
-
       {results && results.length === 0 && (
         <p className="text-sm text-gray-400 italic text-center py-8">
           No results — make sure embeddings have been generated in Settings.
         </p>
       )}
-
       {results && results.length > 0 && (
         <div className="space-y-3">
           {results.map((r, i) => (
@@ -244,9 +385,7 @@ function VectorSearch({ apiKey, apiProvider, disabled }) {
               <div>
                 <p className="font-semibold text-gray-900 text-sm">{r.household}</p>
                 <p className="text-xs text-gray-500 mt-0.5">{r.description}</p>
-                {r.record_date && (
-                  <p className="text-xs text-gray-400 mt-1">{r.record_date}</p>
-                )}
+                {r.record_date && <p className="text-xs text-gray-400 mt-1">{r.record_date}</p>}
               </div>
               <div className="flex-shrink-0 text-right">
                 <span
@@ -270,20 +409,29 @@ function VectorSearch({ apiKey, apiProvider, disabled }) {
   );
 }
 
+// ─── Main export ──────────────────────────────────────────────────────────── //
+
 const TABS = [
-  { id: "ask",    label: "Ask Oracle",     icon: MessageSquare },
+  { id: "chat",   label: "Chat",            icon: MessageSquare },
+  { id: "ask",    label: "Ask Oracle",      icon: Database },
   { id: "search", label: "Semantic Search", icon: Search },
 ];
 
-export default function OracleAI({ oracleStatus, apiKey, apiProvider, onNavigateSettings }) {
-  const [activeTab, setActiveTab] = useState("ask");
-  const disabled = !oracleStatus?.connected;
+export default function AIAssistant({
+  oracleStatus,
+  apiKey,
+  apiProvider,
+  oracleDsn,
+  oracleUser,
+  oraclePassword,
+  onNavigateSettings,
+}) {
+  const [activeTab, setActiveTab] = useState("chat");
+  const oracleDisabled = !oracleStatus?.connected;
 
   return (
-    <div className="space-y-6">
-      <ConnectionBanner status={oracleStatus} onNavigateSettings={onNavigateSettings} />
-
-      {/* Tabs */}
+    <div className="space-y-5">
+      {/* Tab bar */}
       <div className="flex gap-1 bg-gray-100 rounded-lg p-1 w-fit">
         {TABS.map(({ id, label, icon: Icon }) => (
           <button
@@ -301,15 +449,35 @@ export default function OracleAI({ oracleStatus, apiKey, apiProvider, onNavigate
         ))}
       </div>
 
-      {/* Tab content */}
-      <div>
-        {activeTab === "ask" && (
-          <AskOracle apiKey={apiKey} apiProvider={apiProvider} disabled={disabled} />
-        )}
-        {activeTab === "search" && (
-          <VectorSearch apiKey={apiKey} apiProvider={apiProvider} disabled={disabled} />
-        )}
-      </div>
+      {/* Oracle connection banner — only on Oracle tabs */}
+      {activeTab !== "chat" && (
+        <ConnectionBanner status={oracleStatus} onNavigateSettings={onNavigateSettings} />
+      )}
+
+      {/* Pane content */}
+      {activeTab === "chat" && (
+        <ChatPane apiKey={apiKey} apiProvider={apiProvider} />
+      )}
+      {activeTab === "ask" && (
+        <AskOracle
+          apiKey={apiKey}
+          apiProvider={apiProvider}
+          oracleDsn={oracleDsn}
+          oracleUser={oracleUser}
+          oraclePassword={oraclePassword}
+          disabled={oracleDisabled}
+        />
+      )}
+      {activeTab === "search" && (
+        <VectorSearch
+          apiKey={apiKey}
+          apiProvider={apiProvider}
+          oracleDsn={oracleDsn}
+          oracleUser={oracleUser}
+          oraclePassword={oraclePassword}
+          disabled={oracleDisabled}
+        />
+      )}
     </div>
   );
 }

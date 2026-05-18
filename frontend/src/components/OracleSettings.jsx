@@ -1,8 +1,26 @@
 import { useState } from "react";
 import { api } from "../api";
-import { Database, CheckCircle2, XCircle, Loader2 } from "lucide-react";
+import { Database, CheckCircle2, XCircle, Loader2, ChevronDown, ChevronUp } from "lucide-react";
 
-export default function OracleSettings({ oracleStatus, onStatusRefresh, apiKey, apiProvider }) {
+const LS_DSN = "wm_oracle_dsn";
+const LS_USER = "wm_oracle_user";
+const LS_PASSWORD = "wm_oracle_password";
+
+export default function OracleSettings({
+  oracleStatus,
+  onStatusRefresh,
+  onCredentialsChange,
+  apiKey,
+  apiProvider,
+  oracleDsn,
+  oracleUser,
+  oraclePassword,
+}) {
+  const [draftDsn, setDraftDsn] = useState(oracleDsn || "");
+  const [draftUser, setDraftUser] = useState(oracleUser || "");
+  const [draftPassword, setDraftPassword] = useState(oraclePassword || "");
+  const [serverHelpOpen, setServerHelpOpen] = useState(false);
+
   const [initLoading, setInitLoading] = useState(false);
   const [initResult, setInitResult] = useState(null);
   const [syncLoading, setSyncLoading] = useState(false);
@@ -12,11 +30,38 @@ export default function OracleSettings({ oracleStatus, onStatusRefresh, apiKey, 
 
   const connected = oracleStatus?.connected;
 
+  function oracleHeaders() {
+    return {
+      ...(oracleDsn && { "X-Oracle-Dsn": oracleDsn }),
+      ...(oracleUser && { "X-Oracle-User": oracleUser }),
+      ...(oraclePassword && { "X-Oracle-Password": oraclePassword }),
+    };
+  }
+
+  function handleSave() {
+    localStorage.setItem(LS_DSN, draftDsn.trim());
+    localStorage.setItem(LS_USER, draftUser.trim());
+    localStorage.setItem(LS_PASSWORD, draftPassword);
+    onCredentialsChange(draftDsn.trim(), draftUser.trim(), draftPassword);
+    onStatusRefresh();
+  }
+
+  function handleClear() {
+    localStorage.removeItem(LS_DSN);
+    localStorage.removeItem(LS_USER);
+    localStorage.removeItem(LS_PASSWORD);
+    setDraftDsn("");
+    setDraftUser("");
+    setDraftPassword("");
+    onCredentialsChange("", "", "");
+    onStatusRefresh();
+  }
+
   async function handleInit() {
     setInitLoading(true);
     setInitResult(null);
     try {
-      const res = await api.post("/oracle/init");
+      const res = await api.post("/oracle/init", null, { headers: oracleHeaders() });
       setInitResult({ ok: true, message: res.data.message });
     } catch (err) {
       setInitResult({ ok: false, message: err.response?.data?.detail ?? "Failed." });
@@ -29,7 +74,7 @@ export default function OracleSettings({ oracleStatus, onStatusRefresh, apiKey, 
     setSyncLoading(true);
     setSyncResult(null);
     try {
-      const res = await api.post("/oracle/sync");
+      const res = await api.post("/oracle/sync", null, { headers: oracleHeaders() });
       setSyncResult({
         ok: true,
         message: `Synced ${res.data.synced_readings} readings and ${res.data.synced_bills} bills.`,
@@ -50,7 +95,11 @@ export default function OracleSettings({ oracleStatus, onStatusRefresh, apiKey, 
     setEmbedResult(null);
     try {
       const res = await api.post("/oracle/embed-sync", null, {
-        headers: { "X-Api-Key": apiKey, "X-Api-Provider": apiProvider },
+        headers: {
+          "X-Api-Key": apiKey,
+          "X-Api-Provider": apiProvider,
+          ...oracleHeaders(),
+        },
       });
       setEmbedResult({
         ok: true,
@@ -88,11 +137,7 @@ export default function OracleSettings({ oracleStatus, onStatusRefresh, apiKey, 
           <h3 className="font-semibold text-gray-800 text-sm">Oracle 26ai Connection</h3>
         </div>
         <div className="flex items-center gap-2">
-          <span
-            className={`w-2 h-2 rounded-full ${
-              connected ? "bg-green-400" : "bg-gray-300"
-            }`}
-          />
+          <span className={`w-2 h-2 rounded-full ${connected ? "bg-green-400" : "bg-gray-300"}`} />
           <span className={`text-xs font-medium ${connected ? "text-green-700" : "text-gray-500"}`}>
             {connected ? "Connected" : "Not connected"}
           </span>
@@ -106,26 +151,95 @@ export default function OracleSettings({ oracleStatus, onStatusRefresh, apiKey, 
       </div>
 
       <div className="p-5 space-y-5">
-        {/* Not-connected instructions */}
-        {!connected && (
-          <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-sm">
-            <p className="font-semibold text-amber-800 mb-1">How to connect Oracle 26ai</p>
-            <p className="text-amber-700 text-xs leading-relaxed mb-3">
-              Oracle integration is configured via server-side environment variables. Set the following
-              on the host running the FastAPI backend before starting the server:
-            </p>
-            <pre className="bg-white border border-amber-200 rounded px-3 py-2 text-xs font-mono text-gray-700 overflow-x-auto">
+        {/* Credential input fields */}
+        <div className="space-y-3">
+          <p className="text-xs text-gray-500 leading-relaxed">
+            Enter your Oracle connection details. Credentials are stored in this browser only and sent
+            directly to the backend — never persisted on the server.
+          </p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-gray-600">DSN</label>
+              <input
+                className="border border-gray-300 rounded-lg px-3 py-2 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                value={draftDsn}
+                onChange={(e) => setDraftDsn(e.target.value)}
+                placeholder="host:1521/service"
+                autoComplete="off"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-gray-600">Username</label>
+              <input
+                className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                value={draftUser}
+                onChange={(e) => setDraftUser(e.target.value)}
+                placeholder="wm_user"
+                autoComplete="off"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs font-medium text-gray-600">Password</label>
+              <input
+                type="password"
+                className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                value={draftPassword}
+                onChange={(e) => setDraftPassword(e.target.value)}
+                placeholder="••••••••"
+                autoComplete="new-password"
+              />
+            </div>
+          </div>
+
+          <div className="flex gap-2 items-center">
+            <button
+              onClick={handleSave}
+              disabled={!draftDsn.trim() || !draftUser.trim() || !draftPassword}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-1.5 rounded-lg text-xs font-medium disabled:opacity-50 transition-colors"
+            >
+              Save & Test Connection
+            </button>
+            {(oracleDsn || oracleUser) && (
+              <button
+                onClick={handleClear}
+                className="text-red-500 hover:text-red-700 text-xs underline"
+              >
+                Clear
+              </button>
+            )}
+          </div>
+
+          {oracleStatus?.error && !connected && (
+            <p className="text-red-600 text-xs font-mono">{oracleStatus.error}</p>
+          )}
+        </div>
+
+        {/* Server-side env vars accordion */}
+        <div className="border border-gray-100 rounded-lg overflow-hidden">
+          <button
+            onClick={() => setServerHelpOpen((v) => !v)}
+            className="w-full flex items-center justify-between px-4 py-2.5 bg-gray-50 text-xs font-medium text-gray-600 hover:bg-gray-100 transition-colors"
+          >
+            <span>Using server-side env vars instead?</span>
+            {serverHelpOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
+          </button>
+          {serverHelpOpen && (
+            <div className="px-4 py-3 text-xs text-gray-600 space-y-2 bg-white">
+              <p>
+                Set these on the host running the FastAPI backend before starting the server. When env vars are
+                present, the UI credentials above are not required.
+              </p>
+              <pre className="bg-gray-50 border border-gray-200 rounded px-3 py-2 font-mono text-gray-700 overflow-x-auto">
 {`ORACLE_DSN=hostname:1521/service_name
 ORACLE_USER=wm_user
 ORACLE_PASSWORD=your_password`}
-            </pre>
-            {oracleStatus?.error && (
-              <p className="text-red-600 text-xs mt-2 font-mono">{oracleStatus.error}</p>
-            )}
-          </div>
-        )}
+              </pre>
+            </div>
+          )}
+        </div>
 
-        {/* Actions (enabled when connected) */}
+        {/* Action buttons */}
         <div className="space-y-4">
           <div className="flex items-start justify-between gap-4">
             <div>

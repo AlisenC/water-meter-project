@@ -35,12 +35,16 @@ class VectorQuery(BaseModel):
 # --------------------------------------------------------------------------- #
 
 @router.get("/oracle/status")
-def oracle_status():
-    connected, error = is_connected()
+def oracle_status(
+    x_oracle_dsn: str | None = Header(default=None),
+    x_oracle_user: str | None = Header(default=None),
+    x_oracle_password: str | None = Header(default=None),
+):
+    connected, error = is_connected(x_oracle_dsn, x_oracle_user, x_oracle_password)
     if not connected:
         return {"connected": False, "version": None, "error": error}
     try:
-        with get_connection() as conn:
+        with get_connection(x_oracle_dsn, x_oracle_user, x_oracle_password) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT VERSION FROM V$INSTANCE")
                 row = cur.fetchone()
@@ -51,12 +55,15 @@ def oracle_status():
 
 
 @router.post("/oracle/init")
-def oracle_init():
-    connected, error = is_connected()
+def oracle_init(
+    x_oracle_dsn: str | None = Header(default=None),
+    x_oracle_user: str | None = Header(default=None),
+    x_oracle_password: str | None = Header(default=None),
+):
+    connected, error = is_connected(x_oracle_dsn, x_oracle_user, x_oracle_password)
     if not connected:
         raise HTTPException(status_code=503, detail=f"Oracle not connected: {error}")
 
-    # Use PL/SQL EXECUTE IMMEDIATE to silently skip ORA-955 (table exists)
     ddl_blocks = [
         """
         BEGIN
@@ -115,7 +122,7 @@ def oracle_init():
     ]
 
     try:
-        with get_connection() as conn:
+        with get_connection(x_oracle_dsn, x_oracle_user, x_oracle_password) as conn:
             with conn.cursor() as cur:
                 for block in ddl_blocks:
                     cur.execute(block)
@@ -130,8 +137,12 @@ def oracle_init():
 # --------------------------------------------------------------------------- #
 
 @router.post("/oracle/sync")
-def oracle_sync():
-    connected, error = is_connected()
+def oracle_sync(
+    x_oracle_dsn: str | None = Header(default=None),
+    x_oracle_user: str | None = Header(default=None),
+    x_oracle_password: str | None = Header(default=None),
+):
+    connected, error = is_connected(x_oracle_dsn, x_oracle_user, x_oracle_password)
     if not connected:
         raise HTTPException(status_code=503, detail=f"Oracle not connected: {error}")
 
@@ -157,7 +168,7 @@ def oracle_sync():
     synced_bills = 0
 
     try:
-        with get_connection() as conn:
+        with get_connection(x_oracle_dsn, x_oracle_user, x_oracle_password) as conn:
             with conn.cursor() as cur:
                 for r in readings:
                     cur.execute(
@@ -244,11 +255,14 @@ def _embed_voyage(texts: list[str], api_key: str) -> list[list[float]]:
 def oracle_embed_sync(
     x_api_key: str | None = Header(default=None),
     x_api_provider: str | None = Header(default=None),
+    x_oracle_dsn: str | None = Header(default=None),
+    x_oracle_user: str | None = Header(default=None),
+    x_oracle_password: str | None = Header(default=None),
 ):
     if not x_api_key:
         raise HTTPException(status_code=401, detail="API key required for embedding generation.")
 
-    connected, error = is_connected()
+    connected, error = is_connected(x_oracle_dsn, x_oracle_user, x_oracle_password)
     if not connected:
         raise HTTPException(status_code=503, detail=f"Oracle not connected: {error}")
 
@@ -282,7 +296,7 @@ def oracle_embed_sync(
 
     try:
         import oracledb
-        with get_connection() as conn:
+        with get_connection(x_oracle_dsn, x_oracle_user, x_oracle_password) as conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM wm_readings_vectors")
                 for r, desc, emb in zip(readings, descriptions, embeddings):
@@ -314,11 +328,14 @@ def oracle_vector_search(
     q: VectorQuery,
     x_api_key: str | None = Header(default=None),
     x_api_provider: str | None = Header(default=None),
+    x_oracle_dsn: str | None = Header(default=None),
+    x_oracle_user: str | None = Header(default=None),
+    x_oracle_password: str | None = Header(default=None),
 ):
     if not x_api_key:
         raise HTTPException(status_code=401, detail="API key required for vector search.")
 
-    connected, error = is_connected()
+    connected, error = is_connected(x_oracle_dsn, x_oracle_user, x_oracle_password)
     if not connected:
         raise HTTPException(status_code=503, detail=f"Oracle not connected: {error}")
 
@@ -335,7 +352,7 @@ def oracle_vector_search(
     try:
         import oracledb
         query_vec = oracledb.vector(query_emb, oracledb.VECTOR_SUBTYPE_FLOAT32)
-        with get_connection() as conn:
+        with get_connection(x_oracle_dsn, x_oracle_user, x_oracle_password) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -370,15 +387,26 @@ def _extract_sql(raw: str) -> str:
     return match.group(1).strip() if match else raw.strip()
 
 
-def _run_oracle_sql(sql: str) -> list[dict]:
-    with get_connection() as conn:
+def _run_oracle_sql(
+    sql: str,
+    oracle_dsn: str | None = None,
+    oracle_user: str | None = None,
+    oracle_password: str | None = None,
+) -> list[dict]:
+    with get_connection(oracle_dsn, oracle_user, oracle_password) as conn:
         with conn.cursor() as cur:
             cur.execute(sql)
             cols = [d[0].lower() for d in cur.description]
             return [dict(zip(cols, row)) for row in cur.fetchall()]
 
 
-def _ask_oracle_anthropic(question: str, api_key: str) -> dict:
+def _ask_oracle_anthropic(
+    question: str,
+    api_key: str,
+    oracle_dsn: str | None = None,
+    oracle_user: str | None = None,
+    oracle_password: str | None = None,
+) -> dict:
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)
 
@@ -400,7 +428,7 @@ def _ask_oracle_anthropic(question: str, api_key: str) -> dict:
         return {"error": "Only SELECT queries are permitted.", "sql": sql, "result": [], "answer": ""}
 
     try:
-        data_rows = _run_oracle_sql(sql)
+        data_rows = _run_oracle_sql(sql, oracle_dsn, oracle_user, oracle_password)
     except Exception as exc:
         return {"error": str(exc), "sql": sql, "result": [], "answer": ""}
 
@@ -423,7 +451,13 @@ def _ask_oracle_anthropic(question: str, api_key: str) -> dict:
     }
 
 
-def _ask_oracle_openai(question: str, api_key: str) -> dict:
+def _ask_oracle_openai(
+    question: str,
+    api_key: str,
+    oracle_dsn: str | None = None,
+    oracle_user: str | None = None,
+    oracle_password: str | None = None,
+) -> dict:
     import openai
     client = openai.OpenAI(api_key=api_key)
 
@@ -448,7 +482,7 @@ def _ask_oracle_openai(question: str, api_key: str) -> dict:
         return {"error": "Only SELECT queries are permitted.", "sql": sql, "result": [], "answer": ""}
 
     try:
-        data_rows = _run_oracle_sql(sql)
+        data_rows = _run_oracle_sql(sql, oracle_dsn, oracle_user, oracle_password)
     except Exception as exc:
         return {"error": str(exc), "sql": sql, "result": [], "answer": ""}
 
@@ -478,19 +512,22 @@ def oracle_ask(
     q: Question,
     x_api_key: str | None = Header(default=None),
     x_api_provider: str | None = Header(default=None),
+    x_oracle_dsn: str | None = Header(default=None),
+    x_oracle_user: str | None = Header(default=None),
+    x_oracle_password: str | None = Header(default=None),
 ):
     if not x_api_key:
         raise HTTPException(status_code=401, detail="API key required for Oracle AI queries.")
 
-    connected, error = is_connected()
+    connected, error = is_connected(x_oracle_dsn, x_oracle_user, x_oracle_password)
     if not connected:
         raise HTTPException(status_code=503, detail=f"Oracle not connected: {error}")
 
     provider = (x_api_provider or "anthropic").lower()
     try:
         if provider == "openai":
-            return _ask_oracle_openai(q.question, x_api_key)
-        return _ask_oracle_anthropic(q.question, x_api_key)
+            return _ask_oracle_openai(q.question, x_api_key, x_oracle_dsn, x_oracle_user, x_oracle_password)
+        return _ask_oracle_anthropic(q.question, x_api_key, x_oracle_dsn, x_oracle_user, x_oracle_password)
     except HTTPException:
         raise
     except Exception as exc:

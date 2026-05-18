@@ -3,7 +3,6 @@ import {
   BarChart2,
   FileText,
   ClipboardList,
-  Database,
   MessageSquare,
   Settings,
   ChevronLeft,
@@ -16,8 +15,7 @@ const NAV_ITEMS = [
   { id: "analysis",  label: "Analysis",       icon: BarChart2 },
   { id: "bills",     label: "Bills & Imports",icon: FileText },
   { id: "readings",  label: "Readings",       icon: ClipboardList },
-  { id: "oracle",    label: "Oracle AI",      icon: Database },
-  { id: "ai",        label: "Ask AI",         icon: MessageSquare },
+  { id: "ai",        label: "AI Assistant",   icon: MessageSquare },
 ];
 
 function NavBadge({ count }) {
@@ -79,7 +77,7 @@ export default function Sidebar({
         {NAV_ITEMS.map(({ id, label, icon: Icon }) => {
           const isActive = activeSection === id;
           const badge = id === "analysis" ? anomalyCount : id === "bills" ? billingCount : 0;
-          const oracleDot = id === "oracle" ? (oracleConnected ? "green" : "gray") : null;
+          const oracleDot = id === "ai" ? (oracleConnected ? "green" : "gray") : null;
 
           return (
             <button

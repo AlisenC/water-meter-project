@@ -14,9 +14,7 @@ import OracleSettings from "./components/OracleSettings";
 
 const LS_KEY = "wm_api_key";
 const LS_PROVIDER = "wm_api_provider";
-const LS_ORACLE_DSN = "wm_oracle_dsn";
-const LS_ORACLE_USER = "wm_oracle_user";
-const LS_ORACLE_PASSWORD = "wm_oracle_password";
+const LS_ORACLE_PROFILE = "wm_oracle_profile_id";
 
 const SECTIONS = {
   overview: {
@@ -59,9 +57,9 @@ function App() {
   const [activeSection, setActiveSection] = useState("overview");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [oracleStatus, setOracleStatus] = useState(null);
-  const [oracleDsn, setOracleDsn] = useState(() => localStorage.getItem(LS_ORACLE_DSN) || "");
-  const [oracleUser, setOracleUser] = useState(() => localStorage.getItem(LS_ORACLE_USER) || "");
-  const [oraclePassword, setOraclePassword] = useState(() => localStorage.getItem(LS_ORACLE_PASSWORD) || "");
+  const [oracleProfileId, setOracleProfileId] = useState(
+    () => Number(localStorage.getItem(LS_ORACLE_PROFILE)) || null
+  );
 
   useEffect(() => {
     Promise.all([
@@ -78,15 +76,11 @@ function App() {
   }, []);
 
   const checkOracleStatus = useCallback(async () => {
-    const dsn = localStorage.getItem(LS_ORACLE_DSN) || "";
-    const user = localStorage.getItem(LS_ORACLE_USER) || "";
-    const password = localStorage.getItem(LS_ORACLE_PASSWORD) || "";
+    const profileId = Number(localStorage.getItem(LS_ORACLE_PROFILE)) || null;
     try {
       const res = await api.get("/oracle/status", {
         headers: {
-          ...(dsn && { "X-Oracle-Dsn": dsn }),
-          ...(user && { "X-Oracle-User": user }),
-          ...(password && { "X-Oracle-Password": password }),
+          ...(profileId && { "X-Oracle-Profile-Id": String(profileId) }),
         },
       });
       setOracleStatus(res.data);
@@ -101,10 +95,13 @@ function App() {
     return () => clearInterval(id);
   }, [checkOracleStatus]);
 
-  function handleCredentialsChange(dsn, user, password) {
-    setOracleDsn(dsn);
-    setOracleUser(user);
-    setOraclePassword(password);
+  function handleProfileSelect(id) {
+    setOracleProfileId(id);
+    if (id) {
+      localStorage.setItem(LS_ORACLE_PROFILE, String(id));
+    } else {
+      localStorage.removeItem(LS_ORACLE_PROFILE);
+    }
   }
 
   async function refreshBillingData() {
@@ -209,9 +206,7 @@ function App() {
               oracleStatus={oracleStatus}
               apiKey={apiKey}
               apiProvider={apiProvider}
-              oracleDsn={oracleDsn}
-              oracleUser={oracleUser}
-              oraclePassword={oraclePassword}
+              oracleProfileId={oracleProfileId}
               onNavigateSettings={() => setActiveSection("settings")}
             />
           )}
@@ -233,12 +228,10 @@ function App() {
               <OracleSettings
                 oracleStatus={oracleStatus}
                 onStatusRefresh={checkOracleStatus}
-                onCredentialsChange={handleCredentialsChange}
+                onProfileSelect={handleProfileSelect}
+                oracleProfileId={oracleProfileId}
                 apiKey={apiKey}
                 apiProvider={apiProvider}
-                oracleDsn={oracleDsn}
-                oracleUser={oracleUser}
-                oraclePassword={oraclePassword}
               />
             </div>
           )}

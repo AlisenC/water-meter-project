@@ -37,7 +37,7 @@ function ConnectionBanner({ status, onNavigateSettings }) {
         <div className="flex-1">
           <p className="font-semibold text-amber-800 text-sm">Oracle 26ai not connected</p>
           <p className="text-amber-700 text-xs mt-0.5">
-            {status.error ?? "Configure Oracle credentials in Settings to enable these features."}
+            {status.error ?? "Configure an Oracle connection profile in Settings to enable these features."}
           </p>
           <button
             onClick={onNavigateSettings}
@@ -176,7 +176,7 @@ function ChatPane({ apiKey, apiProvider }) {
 
 // ─── Ask Oracle pane (NL2SQL) ─────────────────────────────────────────────── //
 
-function AskOracle({ apiKey, apiProvider, oracleDsn, oracleUser, oraclePassword, disabled }) {
+function AskOracle({ apiKey, apiProvider, oracleProfileId, disabled }) {
   const [question, setQuestion] = useState("");
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState(null);
@@ -186,9 +186,7 @@ function AskOracle({ apiKey, apiProvider, oracleDsn, oracleUser, oraclePassword,
     return {
       "X-Api-Key": apiKey,
       "X-Api-Provider": apiProvider,
-      ...(oracleDsn && { "X-Oracle-Dsn": oracleDsn }),
-      ...(oracleUser && { "X-Oracle-User": oracleUser }),
-      ...(oraclePassword && { "X-Oracle-Password": oraclePassword }),
+      ...(oracleProfileId && { "X-Oracle-Profile-Id": String(oracleProfileId) }),
     };
   }
 
@@ -294,7 +292,7 @@ function AskOracle({ apiKey, apiProvider, oracleDsn, oracleUser, oraclePassword,
 
 // ─── Semantic Search pane ─────────────────────────────────────────────────── //
 
-function VectorSearch({ apiKey, apiProvider, oracleDsn, oracleUser, oraclePassword, disabled }) {
+function VectorSearch({ apiKey, apiProvider, oracleProfileId, disabled }) {
   const [query, setQuery] = useState("");
   const [topK, setTopK] = useState(5);
   const [loading, setLoading] = useState(false);
@@ -305,9 +303,7 @@ function VectorSearch({ apiKey, apiProvider, oracleDsn, oracleUser, oraclePasswo
     return {
       "X-Api-Key": apiKey,
       "X-Api-Provider": apiProvider,
-      ...(oracleDsn && { "X-Oracle-Dsn": oracleDsn }),
-      ...(oracleUser && { "X-Oracle-User": oracleUser }),
-      ...(oraclePassword && { "X-Oracle-Password": oraclePassword }),
+      ...(oracleProfileId && { "X-Oracle-Profile-Id": String(oracleProfileId) }),
     };
   }
 
@@ -421,9 +417,7 @@ export default function AIAssistant({
   oracleStatus,
   apiKey,
   apiProvider,
-  oracleDsn,
-  oracleUser,
-  oraclePassword,
+  oracleProfileId,
   onNavigateSettings,
 }) {
   const [activeTab, setActiveTab] = useState("chat");
@@ -462,9 +456,7 @@ export default function AIAssistant({
         <AskOracle
           apiKey={apiKey}
           apiProvider={apiProvider}
-          oracleDsn={oracleDsn}
-          oracleUser={oracleUser}
-          oraclePassword={oraclePassword}
+          oracleProfileId={oracleProfileId}
           disabled={oracleDisabled}
         />
       )}
@@ -472,9 +464,7 @@ export default function AIAssistant({
         <VectorSearch
           apiKey={apiKey}
           apiProvider={apiProvider}
-          oracleDsn={oracleDsn}
-          oracleUser={oracleUser}
-          oraclePassword={oraclePassword}
+          oracleProfileId={oracleProfileId}
           disabled={oracleDisabled}
         />
       )}

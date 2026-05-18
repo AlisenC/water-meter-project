@@ -1,4 +1,5 @@
 from sqlalchemy import Column, Integer, Float, String, DateTime
+from datetime import datetime
 from .database import Base
 
 class Reading(Base):
@@ -23,3 +24,16 @@ class BillingStatement(Base):
     billing_cost_aud = Column(Float, nullable=False)
     source_filename = Column(String, nullable=True)
     imported_at = Column(DateTime, nullable=False)
+
+
+class OracleProfile(Base):
+    __tablename__ = "oracle_profiles"
+
+    id             = Column(Integer, primary_key=True, autoincrement=True)
+    name           = Column(String, nullable=False)
+    wallet_path    = Column(String, nullable=False)
+    service_name   = Column(String, nullable=False)
+    username       = Column(String, nullable=False)
+    password       = Column(String, nullable=False)
+    wallet_password= Column(String, nullable=True)
+    created_at     = Column(DateTime, default=datetime.utcnow)

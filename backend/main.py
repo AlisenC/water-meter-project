@@ -25,8 +25,8 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI()
 
 class ReadingCreate(BaseModel):
-    household: str
-    amount: float
+    mi: str
+    reading: float
 
 # AI Agent Router
 app.include_router(ai_router, prefix="/ai")
@@ -52,12 +52,12 @@ async def health():
 
 # Add a reading
 @app.post("/readings")
-async def add_reading(reading: ReadingCreate):
+async def add_reading(data: ReadingCreate):
     db = SessionLocal()
 
     new_reading = Reading(
-        mi=reading.household,
-        reading=reading.amount,
+        mi=data.mi,
+        reading=data.reading,
         record_date=datetime.utcnow(),
         unit=1
     )

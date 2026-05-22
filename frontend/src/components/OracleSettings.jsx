@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { api } from "../api";
 import {
   Database, CheckCircle2, XCircle, Loader2,
-  Plus, Trash2, ChevronDown, ChevronUp, Upload,
+  Plus, Trash2, Upload,
 } from "lucide-react";
 
 function ResultPill({ result }) {
@@ -306,8 +306,6 @@ export default function OracleSettings({
   const [profiles, setProfiles] = useState([]);
   const [loadingProfiles, setLoadingProfiles] = useState(true);
   const [showForm, setShowForm] = useState(false);
-  const [serverHelpOpen, setServerHelpOpen] = useState(false);
-
   const [initLoading, setInitLoading] = useState(false);
   const [initResult, setInitResult] = useState(null);
   const [syncLoading, setSyncLoading] = useState(false);
@@ -472,31 +470,6 @@ export default function OracleSettings({
 
           {oracleStatus?.error && !connected && (
             <p className="text-red-600 text-xs font-mono">{oracleStatus.error}</p>
-          )}
-        </div>
-
-        {/* Server-side env vars accordion */}
-        <div className="border border-gray-100 rounded-lg overflow-hidden">
-          <button
-            onClick={() => setServerHelpOpen((v) => !v)}
-            className="w-full flex items-center justify-between px-4 py-2.5 bg-gray-50 text-xs font-medium text-gray-600 hover:bg-gray-100 transition-colors"
-          >
-            <span>Using server-side env vars instead?</span>
-            {serverHelpOpen ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-          </button>
-          {serverHelpOpen && (
-            <div className="px-4 py-3 text-xs text-gray-600 space-y-2 bg-white">
-              <p>
-                Set these on the host running the FastAPI backend. When env vars are present, profiles are not required.
-              </p>
-              <pre className="bg-gray-50 border border-gray-200 rounded px-3 py-2 font-mono text-gray-700 overflow-x-auto">
-{`ORACLE_WALLET_DIR=/path/to/extracted/wallet
-ORACLE_SERVICE_NAME=mydb_high
-ORACLE_USER=wm_user
-ORACLE_PASSWORD=your_password
-ORACLE_WALLET_PASSWORD=optional`}
-              </pre>
-            </div>
           )}
         </div>
 

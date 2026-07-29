@@ -13,5 +13,12 @@ backend/water_meter.db
 .DS_Store
 Thumbs.db
 .vscode/
-prompt.md
+
+# Claude Code
 .claude/
+
+# Local dev files
+prompt.md
+
+# Oracle wallet files (contain certificates and credentials)
+data/

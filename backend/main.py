@@ -14,6 +14,7 @@ from typing import Optional
 from collections import defaultdict
 from statistics import median
 from .ai_agent import router as ai_router
+from .oracle_ai import router as oracle_router
 from . import csv_parser
 import anthropic as anthropic_sdk
 
@@ -24,11 +25,14 @@ Base.metadata.create_all(bind=engine)
 app = FastAPI()
 
 class ReadingCreate(BaseModel):
-    household: str
-    amount: float
+    mi: str
+    reading: float
 
 # AI Agent Router
 app.include_router(ai_router, prefix="/ai")
+
+# Oracle 26ai Router
+app.include_router(oracle_router)
 
 # CORS
 _raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173")
@@ -48,12 +52,12 @@ async def health():
 
 # Add a reading
 @app.post("/readings")
-async def add_reading(reading: ReadingCreate):
+async def add_reading(data: ReadingCreate):
     db = SessionLocal()
 
     new_reading = Reading(
-        mi=reading.household,
-        reading=reading.amount,
+        mi=data.mi,
+        reading=data.reading,
         record_date=datetime.utcnow(),
         unit=1
     )

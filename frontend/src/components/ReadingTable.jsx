@@ -2,23 +2,8 @@ import { useState } from "react";
 import { toast } from "react-hot-toast";
 import { api } from "../api";
 import { Search, Download } from "lucide-react";
-
-function exportCSV(rows, filename) {
-  if (!rows.length) return;
-  const headers = Object.keys(rows[0]).join(",");
-  const lines = rows.map((r) =>
-    Object.values(r)
-      .map((v) => (typeof v === "string" && v.includes(",") ? `"${v}"` : v))
-      .join(",")
-  );
-  const blob = new Blob([[headers, ...lines].join("\n")], { type: "text/csv" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  a.click();
-  URL.revokeObjectURL(url);
-}
+import { toUnits, unitsToCubicFeet } from "../utils/units";
+import { exportCSV } from "../utils/billing";
 
 export default function ReadingTable({ readings, setReadings }) {
   const [mi, setMi] = useState("");
@@ -36,7 +21,10 @@ export default function ReadingTable({ readings, setReadings }) {
     e.preventDefault();
     if (!mi || !reading) return;
     try {
-      const res = await api.post("/readings", { mi, reading: parseFloat(reading) });
+      // Manual entries are stored as cubic feet (unit=1) server-side — convert
+      // the user's "units of water" input on the way in so it stays on the
+      // same normalized footing as CSV/statement data.
+      const res = await api.post("/readings", { mi, reading: unitsToCubicFeet(parseFloat(reading)) });
       setReadings([...readings, res.data]);
       setMi("");
       setReading("");
@@ -70,7 +58,7 @@ export default function ReadingTable({ readings, setReadings }) {
             />
           </div>
           <div className="flex flex-col gap-1">
-            <label className="text-xs text-gray-500">Reading (kL)</label>
+            <label className="text-xs text-gray-500">Reading (units of water)</label>
             <input
               className="border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent w-32"
               type="number"
@@ -108,9 +96,8 @@ export default function ReadingTable({ readings, setReadings }) {
               exportCSV(
                 filtered.map((r) => ({
                   household: r.mi,
-                  reading_kl: r.reading,
+                  reading_units: toUnits(r.reading, r.unit).toFixed(3),
                   date: new Date(r.record_date).toLocaleDateString("en-AU"),
-                  unit: r.unit,
                 })),
                 "readings.csv"
               )
@@ -133,9 +120,8 @@ export default function ReadingTable({ readings, setReadings }) {
               <thead>
                 <tr className="text-left text-gray-500 border-b border-gray-100 bg-gray-50">
                   <th className="px-5 py-2.5 text-xs font-semibold uppercase tracking-wider">Household</th>
-                  <th className="px-5 py-2.5 text-xs font-semibold uppercase tracking-wider">Reading (kL)</th>
+                  <th className="px-5 py-2.5 text-xs font-semibold uppercase tracking-wider">Reading (units)</th>
                   <th className="px-5 py-2.5 text-xs font-semibold uppercase tracking-wider">Date</th>
-                  <th className="px-5 py-2.5 text-xs font-semibold uppercase tracking-wider">Unit</th>
                   <th className="px-5 py-2.5" />
                 </tr>
               </thead>
@@ -143,14 +129,13 @@ export default function ReadingTable({ readings, setReadings }) {
                 {filtered.map((r) => (
                   <tr key={r.id} className="hover:bg-blue-50 transition-colors">
                     <td className="px-5 py-3 font-medium text-gray-900">{r.mi}</td>
-                    <td className="px-5 py-3 font-mono text-gray-700">{r.reading}</td>
+                    <td className="px-5 py-3 font-mono text-gray-700">{toUnits(r.reading, r.unit).toFixed(3)}</td>
                     <td className="px-5 py-3 text-gray-500">
                       {new Date(r.record_date).toLocaleDateString("en-AU", {
                         month: "short",
                         year: "numeric",
                       })}
                     </td>
-                    <td className="px-5 py-3 text-gray-500">{r.unit}</td>
                     <td className="px-5 py-3 text-right">
                       <button
                         onClick={() => handleDelete(r.id)}

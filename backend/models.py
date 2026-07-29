@@ -20,8 +20,9 @@ class BillingStatement(Base):
     billing_year = Column(Integer, nullable=False)
     period_end_month = Column(Integer, nullable=True)
     period_end_year = Column(Integer, nullable=True)
-    total_consumption_kl = Column(Float, nullable=False)
-    billing_cost_aud = Column(Float, nullable=False)
+    total_units_consumed = Column(Float, nullable=False)
+    total_cost = Column(Float, nullable=False)
+    cost_per_unit = Column(Float, nullable=True)
     source_filename = Column(String, nullable=True)
     imported_at = Column(DateTime, nullable=False)
 

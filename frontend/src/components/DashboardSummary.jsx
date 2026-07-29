@@ -1,4 +1,5 @@
-import { TrendingUp, DollarSign, Zap } from "lucide-react";
+import { TrendingUp, DollarSign, Zap, Receipt } from "lucide-react";
+import { DISCREPANCY_TOLERANCE_UNITS } from "../utils/billing";
 
 function monthLabel(year, month) {
   return new Date(year, month - 1, 1).toLocaleDateString("en-AU", {
@@ -58,7 +59,7 @@ export default function DashboardSummary({
 
   const verifyOk =
     latestVerification?.has_sufficient_readings &&
-    Math.abs(latestVerification.discrepancy_kl) < 0.5;
+    Math.abs(latestVerification.discrepancy_units) < DISCREPANCY_TOLERANCE_UNITS;
   const verifyStyles = !latestVerification || !latestVerification.has_sufficient_readings
     ? "bg-gray-50 border-gray-200 text-gray-500"
     : verifyOk
@@ -68,12 +69,12 @@ export default function DashboardSummary({
   return (
     <div className="space-y-6">
       {/* Stat card grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           icon={TrendingUp}
           iconColor="bg-blue-100 text-blue-600"
           label="Latest Consumption"
-          value={latestBilling ? `${latestBilling.total_consumption_kl.toFixed(3)} kL` : "—"}
+          value={latestBilling ? `${latestBilling.total_units_consumed.toFixed(2)} units` : "—"}
           sub={billingPeriodLabel ?? "No statement imported"}
           accent="blue"
         />
@@ -81,9 +82,17 @@ export default function DashboardSummary({
           icon={DollarSign}
           iconColor="bg-indigo-100 text-indigo-600"
           label="Billing Cost"
-          value={latestBilling ? `$${latestBilling.billing_cost_aud.toFixed(2)}` : "—"}
-          sub={latestBilling ? "AUD" : "No statement imported"}
+          value={latestBilling ? `$${latestBilling.total_cost.toFixed(2)}` : "—"}
+          sub={latestBilling ? "USD" : "No statement imported"}
           accent="indigo"
+        />
+        <StatCard
+          icon={Receipt}
+          iconColor="bg-green-100 text-green-600"
+          label="Cost per Unit"
+          value={latestBilling?.cost_per_unit != null ? `$${latestBilling.cost_per_unit.toFixed(2)}` : "—"}
+          sub={latestBilling ? "per unit of water (748 gal)" : "No statement imported"}
+          accent="green"
         />
         <StatCard
           icon={Zap}
@@ -103,17 +112,26 @@ export default function DashboardSummary({
             <div className="flex flex-wrap gap-6">
               <span>
                 Household sum:{" "}
-                <span className="font-mono font-semibold">{latestVerification.household_sum_kl} kL</span>
+                <span className="font-mono font-semibold">{latestVerification.household_sum_units} units</span>
               </span>
               <span>
                 Discrepancy:{" "}
                 <span className="font-mono font-semibold">
-                  {latestVerification.discrepancy_kl > 0 ? "+" : ""}
-                  {latestVerification.discrepancy_kl} kL
+                  {latestVerification.discrepancy_units > 0 ? "+" : ""}
+                  {latestVerification.discrepancy_units} units
                 </span>
                 {" · "}
                 {verifyOk ? "readings match statement" : "readings differ from statement"}
               </span>
+              {latestVerification.money_lost != null && (
+                <span>
+                  Money lost:{" "}
+                  <span className="font-mono font-semibold">
+                    {latestVerification.money_lost > 0 ? "+" : ""}
+                    ${latestVerification.money_lost.toFixed(2)}
+                  </span>
+                </span>
+              )}
             </div>
           ) : (
             <p className="italic text-sm">Insufficient household readings for this billing period.</p>

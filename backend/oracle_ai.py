@@ -241,6 +241,13 @@ def oracle_init(x_oracle_profile_id: int | None = Header(default=None)):
         """,
         """
         BEGIN
+            EXECUTE IMMEDIATE 'DROP TABLE wm_billing_statements';
+        EXCEPTION WHEN OTHERS THEN
+            IF SQLCODE != -942 THEN RAISE; END IF;
+        END;
+        """,
+        """
+        BEGIN
             EXECUTE IMMEDIATE '
                 CREATE TABLE wm_billing_statements (
                     id                   NUMBER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -248,8 +255,9 @@ def oracle_init(x_oracle_profile_id: int | None = Header(default=None)):
                     billing_year         NUMBER(4) NOT NULL,
                     period_end_month     NUMBER(2),
                     period_end_year      NUMBER(4),
-                    total_consumption_kl NUMBER(10,4) NOT NULL,
-                    billing_cost_aud     NUMBER(10,2) NOT NULL,
+                    total_units_consumed NUMBER(10,4) NOT NULL,
+                    total_cost           NUMBER(10,2) NOT NULL,
+                    cost_per_unit        NUMBER(10,4),
                     source_filename      VARCHAR2(500),
                     sqlite_id            NUMBER,
                     synced_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -310,7 +318,7 @@ def oracle_sync(x_oracle_profile_id: int | None = Header(default=None)):
             for r in conn.execute(
                 text(
                     "SELECT id, billing_month, billing_year, period_end_month, period_end_year,"
-                    " total_consumption_kl, billing_cost_aud, source_filename FROM billing_statements"
+                    " total_units_consumed, total_cost, cost_per_unit, source_filename FROM billing_statements"
                 )
             )
         ]
@@ -350,15 +358,16 @@ def oracle_sync(x_oracle_profile_id: int | None = Header(default=None)):
                         ON (dest.sqlite_id = src.sqlite_id)
                         WHEN MATCHED THEN
                             UPDATE SET billing_month = :billing_month, billing_year = :billing_year,
-                                       total_consumption_kl = :total_consumption_kl,
-                                       billing_cost_aud = :billing_cost_aud,
+                                       total_units_consumed = :total_units_consumed,
+                                       total_cost = :total_cost,
+                                       cost_per_unit = :cost_per_unit,
                                        synced_at = CURRENT_TIMESTAMP
                         WHEN NOT MATCHED THEN
                             INSERT (billing_month, billing_year, period_end_month, period_end_year,
-                                    total_consumption_kl, billing_cost_aud, source_filename,
+                                    total_units_consumed, total_cost, cost_per_unit, source_filename,
                                     sqlite_id, synced_at)
                             VALUES (:billing_month, :billing_year, :period_end_month, :period_end_year,
-                                    :total_consumption_kl, :billing_cost_aud, :source_filename,
+                                    :total_units_consumed, :total_cost, :cost_per_unit, :source_filename,
                                     :sqlite_id, CURRENT_TIMESTAMP)
                         """,
                         {
@@ -366,8 +375,9 @@ def oracle_sync(x_oracle_profile_id: int | None = Header(default=None)):
                             "billing_month": b["billing_month"], "billing_year": b["billing_year"],
                             "period_end_month": b.get("period_end_month"),
                             "period_end_year": b.get("period_end_year"),
-                            "total_consumption_kl": b["total_consumption_kl"],
-                            "billing_cost_aud": b["billing_cost_aud"],
+                            "total_units_consumed": b["total_units_consumed"],
+                            "total_cost": b["total_cost"],
+                            "cost_per_unit": b.get("cost_per_unit"),
                             "source_filename": b.get("source_filename"),
                         },
                     )
@@ -383,6 +393,17 @@ def oracle_sync(x_oracle_profile_id: int | None = Header(default=None)):
 # --------------------------------------------------------------------------- #
 # Embeddings                                                                   #
 # --------------------------------------------------------------------------- #
+
+# Mirrors backend/main.py's _to_units — duplicated here rather than imported to avoid a circular
+# import (main.py imports this module's router).
+_CUFT_TO_GAL = 7.48052
+_GALLONS_PER_UNIT = 748.0
+
+
+def _to_units(reading: float, unit: int) -> float:
+    gallons = reading * _CUFT_TO_GAL if unit == 1 else reading
+    return gallons / _GALLONS_PER_UNIT
+
 
 def _embed_openai(texts: list[str], api_key: str) -> list[list[float]]:
     import openai
@@ -417,14 +438,17 @@ def oracle_embed_sync(
     with sqlite_engine.connect() as conn:
         readings = [
             dict(r)
-            for r in conn.execute(text("SELECT id, mi, reading, record_date FROM readings ORDER BY id"))
+            for r in conn.execute(text("SELECT id, mi, reading, record_date, unit FROM readings ORDER BY id"))
         ]
 
     if not readings:
         return {"embedded": 0, "provider": provider, "dims": 0}
 
+    for r in readings:
+        r["units_of_water"] = round(_to_units(r["reading"], r["unit"]), 3)
+
     descriptions = [
-        f"{r['mi']} meter reading {r['reading']} kL on {r['record_date']}"
+        f"{r['mi']} meter reading {r['units_of_water']} units of water on {r['record_date']}"
         for r in readings
     ]
 
@@ -453,7 +477,7 @@ def oracle_embed_sync(
                         """,
                         {
                             "reading_id": r["id"], "household": r["mi"],
-                            "reading_value": r["reading"], "record_date": r["record_date"],
+                            "reading_value": r["units_of_water"], "record_date": r["record_date"],
                             "description": desc, "embedding": emb_vec,
                         },
                     )

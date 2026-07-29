@@ -395,7 +395,7 @@ function VectorSearch({ apiKey, apiProvider, oracleProfileId, disabled }) {
                 >
                   {r.similarity}% match
                 </span>
-                <p className="text-xs font-mono text-gray-500 mt-1">{r.reading_value} kL</p>
+                <p className="text-xs font-mono text-gray-500 mt-1">{r.reading_value} units</p>
               </div>
             </div>
           ))}

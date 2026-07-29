@@ -5,8 +5,9 @@ import AIAssistant from "./components/AIAssistant";
 import ReadingTable from "./components/ReadingTable";
 import DashboardSummary from "./components/DashboardSummary";
 import UsageCharts from "./components/UsageCharts";
+import MoneyLostChart from "./components/MoneyLostChart";
 import DataQuality from "./components/DataQuality";
-import BillingImport from "./components/BillingImport";
+import StatementUpload from "./components/StatementUpload";
 import ApiKeySettings from "./components/ApiKeySettings";
 import ImportWizard from "./components/ImportWizard";
 import Sidebar from "./components/Sidebar";
@@ -25,13 +26,13 @@ const SECTIONS = {
     title: "Analysis",
     description: "Interactive charts and spike detection across all meters.",
   },
-  bills: {
-    title: "Bills & Imports",
-    description: "Import and manage PDF bills and CSV meter readings.",
+  statements: {
+    title: "Bill Statements",
+    description: "Import and browse PDF billing statements.",
   },
   readings: {
     title: "Readings",
-    description: "Search, filter, and manage individual meter readings.",
+    description: "Import CSV meter readings, and search, filter, and manage individual readings.",
   },
   ai: {
     title: "AI Assistant",
@@ -174,31 +175,32 @@ function App() {
           {activeSection === "analysis" && (
             <div className="space-y-6">
               <UsageCharts readings={readings} />
+              <MoneyLostChart verificationData={verificationData} />
               <DataQuality importReport={lastImportReport} anomalies={anomalies} />
             </div>
           )}
 
-          {activeSection === "bills" && (
+          {activeSection === "statements" && (
+            <StatementUpload
+              billingStatements={billingStatements}
+              verificationData={verificationData}
+              apiKey={apiKey}
+              apiProvider={apiProvider}
+              onImportSuccess={refreshBillingData}
+              onDelete={handleBillingDelete}
+            />
+          )}
+
+          {activeSection === "readings" && (
             <div className="space-y-4">
-              <BillingImport
-                billingStatements={billingStatements}
-                verificationData={verificationData}
-                apiKey={apiKey}
-                apiProvider={apiProvider}
-                onImportSuccess={refreshBillingData}
-                onDelete={handleBillingDelete}
-              />
               <button
                 onClick={() => setShowImportWizard(true)}
                 className="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg font-medium text-sm transition-colors"
               >
                 Import CSV Data
               </button>
+              <ReadingTable readings={readings} setReadings={setReadings} />
             </div>
-          )}
-
-          {activeSection === "readings" && (
-            <ReadingTable readings={readings} setReadings={setReadings} />
           )}
 
           {activeSection === "ai" && (

@@ -334,12 +334,12 @@ EXTRACTION_PROMPT = """Return ONLY a valid JSON object with these exact keys (no
   "billing_period_start_year": <integer>,
   "billing_period_end_month": <integer 1-12>,
   "billing_period_end_year": <integer>,
-  "total_consumption_kl": <float, kilolitres>,
-  "total_cost_aud": <float, AUD total payable>
+  "total_units_consumed": <float, units of water>,
+  "total_cost": <float, total amount due in USD>
 }
 Rules:
-- total_consumption_kl: total water used in kL (1 cubic metre = 1 kL).
-- total_cost_aud: total amount payable in AUD.
+- total_units_consumed: the "total consumption in units of water" figure as printed on the statement (1 unit of water = 748 gallons). Report the number exactly as printed — do not convert it to gallons, cubic feet, or any other unit.
+- total_cost: the total amount due for this bill, in US dollars, no currency symbol.
 - Use null for any field that cannot be determined.
 - Return only the JSON object. No other text."""
 
@@ -415,7 +415,7 @@ async def import_billing(
     required = [
         "billing_period_start_month", "billing_period_start_year",
         "billing_period_end_month", "billing_period_end_year",
-        "total_consumption_kl", "total_cost_aud",
+        "total_units_consumed", "total_cost",
     ]
     missing = [f for f in required if extracted.get(f) is None]
     if missing:
@@ -433,13 +433,18 @@ async def import_billing(
         db.close()
         raise HTTPException(status_code=409, detail=f"A statement for {start_month}/{start_year} already exists (id={existing.id}).")
 
+    total_units_consumed = float(extracted["total_units_consumed"])
+    total_cost = float(extracted["total_cost"])
+    cost_per_unit = round(total_cost / total_units_consumed, 4) if total_units_consumed else None
+
     stmt = BillingStatement(
         billing_month=start_month,
         billing_year=start_year,
         period_end_month=int(extracted["billing_period_end_month"]),
         period_end_year=int(extracted["billing_period_end_year"]),
-        total_consumption_kl=float(extracted["total_consumption_kl"]),
-        billing_cost_aud=float(extracted["total_cost_aud"]),
+        total_units_consumed=total_units_consumed,
+        total_cost=total_cost,
+        cost_per_unit=cost_per_unit,
         source_filename=file.filename,
         imported_at=datetime.utcnow(),
     )
@@ -454,8 +459,9 @@ async def import_billing(
         "billing_year": stmt.billing_year,
         "period_end_month": stmt.period_end_month,
         "period_end_year": stmt.period_end_year,
-        "total_consumption_kl": stmt.total_consumption_kl,
-        "billing_cost_aud": stmt.billing_cost_aud,
+        "total_units_consumed": stmt.total_units_consumed,
+        "total_cost": stmt.total_cost,
+        "cost_per_unit": stmt.cost_per_unit,
         "source_filename": stmt.source_filename,
     }
 
@@ -476,8 +482,9 @@ async def get_billing_statements():
             "billing_year": s.billing_year,
             "period_end_month": s.period_end_month,
             "period_end_year": s.period_end_year,
-            "total_consumption_kl": s.total_consumption_kl,
-            "billing_cost_aud": s.billing_cost_aud,
+            "total_units_consumed": s.total_units_consumed,
+            "total_cost": s.total_cost,
+            "cost_per_unit": s.cost_per_unit,
             "source_filename": s.source_filename,
             "imported_at": s.imported_at.isoformat() if s.imported_at else None,
         }
@@ -499,12 +506,14 @@ async def delete_billing_statement(stmt_id: int):
     return {"ok": True}
 
 
-_GALLON_TO_KL = 0.00378541
-_CUFT_TO_KL = 0.0283168
+_CUFT_TO_GAL = 7.48052
+_GALLONS_PER_UNIT = 748.0
+DISCREPANCY_TOLERANCE_UNITS = 1.0  # ~748 gallons; a statement/household-sum pair within this is considered "matching"
 
 
-def _to_kl(reading: float, unit: int) -> float:
-    return reading * (_CUFT_TO_KL if unit == 1 else _GALLON_TO_KL)
+def _to_units(reading: float, unit: int) -> float:
+    gallons = reading * _CUFT_TO_GAL if unit == 1 else reading
+    return gallons / _GALLONS_PER_UNIT
 
 
 # Verify billing statements against summed household meter readings
@@ -518,9 +527,11 @@ async def billing_verify():
     all_readings = db.query(Reading).order_by(Reading.record_date).all()
     db.close()
 
-    # Group readings by household
+    # Group readings by household (exclude the main/master meter, if present, to avoid double-counting)
     by_mi: dict[str, list] = defaultdict(list)
     for r in all_readings:
+        if r.mi == "MAIN":
+            continue
         by_mi[r.mi].append(r)
 
     results = []
@@ -534,7 +545,7 @@ async def billing_verify():
         else:
             period_end = date_type(end_year, end_month + 1, 1)
 
-        household_sum_kl = 0.0
+        household_sum_units = 0.0
         has_any_data = False
 
         for readings in by_mi.values():
@@ -546,11 +557,16 @@ async def billing_verify():
             end_rdg = before_end[-1]
             if baseline.id == end_rdg.id:
                 continue
-            household_sum_kl += max(0.0, _to_kl(end_rdg.reading, end_rdg.unit) - _to_kl(baseline.reading, baseline.unit))
+            household_sum_units += max(0.0, _to_units(end_rdg.reading, end_rdg.unit) - _to_units(baseline.reading, baseline.unit))
             has_any_data = True
 
-        household_sum_kl = round(household_sum_kl, 3) if has_any_data else None
-        discrepancy_kl = round(stmt.total_consumption_kl - household_sum_kl, 3) if household_sum_kl is not None else None
+        household_sum_units = round(household_sum_units, 3) if has_any_data else None
+        discrepancy_units = round(stmt.total_units_consumed - household_sum_units, 3) if household_sum_units is not None else None
+        money_lost = (
+            round(discrepancy_units * stmt.cost_per_unit, 2)
+            if discrepancy_units is not None and stmt.cost_per_unit is not None
+            else None
+        )
 
         results.append({
             "billing_statement_id": stmt.id,
@@ -558,10 +574,12 @@ async def billing_verify():
             "billing_year": stmt.billing_year,
             "period_end_month": end_month,
             "period_end_year": end_year,
-            "total_consumption_kl": stmt.total_consumption_kl,
-            "billing_cost_aud": stmt.billing_cost_aud,
-            "household_sum_kl": household_sum_kl,
-            "discrepancy_kl": discrepancy_kl,
+            "total_units_consumed": stmt.total_units_consumed,
+            "total_cost": stmt.total_cost,
+            "cost_per_unit": stmt.cost_per_unit,
+            "household_sum_units": household_sum_units,
+            "discrepancy_units": discrepancy_units,
+            "money_lost": money_lost,
             "has_sufficient_readings": has_any_data,
         })
 

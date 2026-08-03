@@ -8,14 +8,11 @@ services:
       - ./data:/app/data
     environment:
       - DATABASE_URL=sqlite:////app/data/water_meter.db
-      - ALLOWED_ORIGINS=http://<remote-host-or-IP>:8080
       - DATA_DIR=/app/data
 
   frontend:
     build:
       context: ./frontend
-      args:
-        VITE_API_URL: http://localhost:8500
     ports:
       - "8080:80"
     depends_on:

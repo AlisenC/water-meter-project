@@ -2,7 +2,7 @@ import { useState } from "react";
 import { toast } from "react-hot-toast";
 import { api } from "../api";
 import { Search, Download } from "lucide-react";
-import { toUnits, unitsToCubicFeet } from "../utils/units";
+import { toUnits } from "../utils/units";
 import { exportCSV } from "../utils/billing";
 
 export default function ReadingTable({ readings, setReadings }) {
@@ -21,10 +21,9 @@ export default function ReadingTable({ readings, setReadings }) {
     e.preventDefault();
     if (!mi || !reading) return;
     try {
-      // Manual entries are stored as cubic feet (unit=1) server-side — convert
-      // the user's "units of water" input on the way in so it stays on the
-      // same normalized footing as CSV/statement data.
-      const res = await api.post("/readings", { mi, reading: unitsToCubicFeet(parseFloat(reading)) });
+      // Manual entries are stored with unit=1 (already units of water) server-side,
+      // so the user's input is sent through unchanged.
+      const res = await api.post("/readings", { mi, reading: parseFloat(reading) });
       setReadings([...readings, res.data]);
       setMi("");
       setReading("");

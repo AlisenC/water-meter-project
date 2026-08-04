@@ -396,13 +396,11 @@ def oracle_sync(x_oracle_profile_id: int | None = Header(default=None)):
 
 # Mirrors backend/main.py's _to_units — duplicated here rather than imported to avoid a circular
 # import (main.py imports this module's router).
-_CUFT_TO_GAL = 7.48052
 _GALLONS_PER_UNIT = 748.0
 
 
 def _to_units(reading: float, unit: int) -> float:
-    gallons = reading * _CUFT_TO_GAL if unit == 1 else reading
-    return gallons / _GALLONS_PER_UNIT
+    return reading if unit == 1 else reading / _GALLONS_PER_UNIT
 
 
 def _embed_openai(texts: list[str], api_key: str) -> list[list[float]]:

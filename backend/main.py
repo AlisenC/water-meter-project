@@ -21,7 +21,6 @@ import anthropic as anthropic_sdk
 
 GAP_MULTIPLIER = 1.5
 
-_CUFT_TO_GAL = 7.48052
 _GALLONS_PER_UNIT = 748.0
 DISCREPANCY_TOLERANCE_UNITS = 1.0  # ~748 gallons; a statement/household-sum pair within this is considered "matching"
 # What 748 gallons would have converted to under the old (mislabeled) "kilolitres" constant —
@@ -30,8 +29,7 @@ _LEGACY_KL_PER_UNIT = 748.0 * 0.00378541
 
 
 def _to_units(reading: float, unit: int) -> float:
-    gallons = reading * _CUFT_TO_GAL if unit == 1 else reading
-    return gallons / _GALLONS_PER_UNIT
+    return reading if unit == 1 else reading / _GALLONS_PER_UNIT
 
 
 def _household_sum_units(readings_by_mi: dict, billing_month: int, billing_year: int,

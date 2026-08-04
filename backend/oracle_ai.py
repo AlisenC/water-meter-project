@@ -396,7 +396,7 @@ def oracle_sync(x_oracle_profile_id: int | None = Header(default=None)):
 
 # Mirrors backend/main.py's _to_units — duplicated here rather than imported to avoid a circular
 # import (main.py imports this module's router).
-_GALLONS_PER_UNIT = 748.0
+_GALLONS_PER_UNIT = 0.748
 
 
 def _to_units(reading: float, unit: int) -> float:

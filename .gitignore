@@ -22,4 +22,4 @@ prompt.md
 samples/
 
 # Oracle wallet files (contain certificates and credentials)
-data/
+data_dumps/

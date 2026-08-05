@@ -16,20 +16,17 @@ from collections import defaultdict
 from statistics import median
 from .ai_agent import router as ai_router
 from .oracle_ai import router as oracle_router
+from .leak_detection import router as leak_router
 from . import csv_parser
+from .units import to_units as _to_units
 import anthropic as anthropic_sdk
 
 GAP_MULTIPLIER = 1.5
 
-_GALLONS_PER_UNIT = 0.748
 DISCREPANCY_TOLERANCE_UNITS = 1.0  # ~748 gallons; a statement/household-sum pair within this is considered "matching"
 # What 748 gallons would have converted to under the old (mislabeled) "kilolitres" constant —
 # used only by the one-time migration below to guess whether legacy data needs converting.
 _LEGACY_KL_PER_UNIT = 0.748 * 0.00378541
-
-
-def _to_units(reading: float, unit: int) -> float:
-    return reading if unit == 1 else reading / _GALLONS_PER_UNIT
 
 
 def _household_sum_units(readings_by_mi: dict, billing_month: int, billing_year: int,
@@ -135,6 +132,9 @@ app.include_router(ai_router, prefix="/ai")
 
 # Oracle 26ai Router
 app.include_router(oracle_router)
+
+# Daily Leak Detection Router
+app.include_router(leak_router, prefix="/leak")
 
 # CORS
 _raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173")

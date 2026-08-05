@@ -13,6 +13,7 @@ from sqlalchemy import text
 from .database import SessionLocal, engine as sqlite_engine
 from .models import OracleProfile
 from .oracle_connection import is_connected, get_connection
+from .units import to_units as _to_units
 
 router = APIRouter()
 
@@ -393,15 +394,6 @@ def oracle_sync(x_oracle_profile_id: int | None = Header(default=None)):
 # --------------------------------------------------------------------------- #
 # Embeddings                                                                   #
 # --------------------------------------------------------------------------- #
-
-# Mirrors backend/main.py's _to_units — duplicated here rather than imported to avoid a circular
-# import (main.py imports this module's router).
-_GALLONS_PER_UNIT = 0.748
-
-
-def _to_units(reading: float, unit: int) -> float:
-    return reading if unit == 1 else reading / _GALLONS_PER_UNIT
-
 
 def _embed_openai(texts: list[str], api_key: str) -> list[list[float]]:
     import openai

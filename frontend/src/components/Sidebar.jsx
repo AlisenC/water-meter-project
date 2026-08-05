@@ -8,6 +8,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Droplets,
+  AlertTriangle,
 } from "lucide-react";
 
 const NAV_ITEMS = [
@@ -15,6 +16,7 @@ const NAV_ITEMS = [
   { id: "analysis",    label: "Analysis",       icon: BarChart2 },
   { id: "statements",  label: "Bill Statements",icon: Receipt },
   { id: "readings",    label: "Readings",       icon: ClipboardList },
+  { id: "leak",        label: "Leak Detection", icon: AlertTriangle },
   { id: "ai",          label: "AI Assistant",   icon: MessageSquare },
 ];
 

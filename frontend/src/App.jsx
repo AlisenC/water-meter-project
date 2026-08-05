@@ -12,6 +12,7 @@ import ApiKeySettings from "./components/ApiKeySettings";
 import ImportWizard from "./components/ImportWizard";
 import Sidebar from "./components/Sidebar";
 import OracleSettings from "./components/OracleSettings";
+import LeakDetectionTool from "./components/LeakDetectionTool";
 
 const LS_KEY = "wm_api_key";
 const LS_PROVIDER = "wm_api_provider";
@@ -33,6 +34,10 @@ const SECTIONS = {
   readings: {
     title: "Readings",
     description: "Import CSV meter readings, and search, filter, and manage individual readings.",
+  },
+  leak: {
+    title: "Daily Leak Detection",
+    description: "Track daily submeter and main meter readings to spot potential leaks, independent of monthly billing.",
   },
   ai: {
     title: "AI Assistant",
@@ -202,6 +207,8 @@ function App() {
               <ReadingTable readings={readings} setReadings={setReadings} />
             </div>
           )}
+
+          {activeSection === "leak" && <LeakDetectionTool />}
 
           {activeSection === "ai" && (
             <AIAssistant

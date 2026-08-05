@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, Float, String, DateTime
+from sqlalchemy import Column, Integer, Float, String, DateTime, ForeignKey
 from datetime import datetime
 from .database import Base
 
@@ -25,6 +25,41 @@ class BillingStatement(Base):
     cost_per_unit = Column(Float, nullable=True)
     source_filename = Column(String, nullable=True)
     imported_at = Column(DateTime, nullable=False)
+
+
+class LeakSession(Base):
+    __tablename__ = "leak_sessions"
+
+    id = Column(Integer, primary_key=True, index=True)
+    status = Column(String, nullable=False, default="active")  # "active" | "archived"
+    created_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+    archived_at = Column(DateTime, nullable=True)
+
+
+class LeakSubmeterReading(Base):
+    __tablename__ = "leak_submeter_readings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey("leak_sessions.id"), nullable=False, index=True)
+    mi = Column(String, nullable=False)
+    reading = Column(Float, nullable=False)
+    record_date = Column(DateTime, nullable=False)
+    unit = Column(Integer, nullable=False)  # 0 = gallons, 1 = units of water (CCF)
+
+
+class LeakMainMeterReading(Base):
+    __tablename__ = "leak_main_meter_readings"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(Integer, ForeignKey("leak_sessions.id"), nullable=False, index=True)
+    account_id = Column(String, nullable=True)
+    meter_id = Column(String, nullable=True)
+    meter_sn = Column(String, nullable=True)
+    read_time = Column(DateTime, nullable=False)
+    read_value = Column(Float, nullable=False)   # cumulative "Read", in CCF
+    flow_time = Column(DateTime, nullable=True)  # period-end date for "Flow"
+    flow_value = Column(Float, nullable=True)    # pre-computed period delta from the CSV, in CCF
+    register = Column(String, nullable=True)
 
 
 class OracleProfile(Base):

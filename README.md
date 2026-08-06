@@ -116,7 +116,7 @@ Frontend: http://localhost:5173 · Backend: http://localhost:8000
 
 ## Configuration
 
-### AI provider (required for PDF import and AI chat)
+### AI provider (required for AI chat; PDF import falls back to a local model)
 
 Open **Settings → AI Provider Settings** in the app and paste your API key.
 
@@ -126,6 +126,28 @@ Open **Settings → AI Provider Settings** in the app and paste your API key.
 | OpenAI | `sk-...` | GPT-4o for chat/NL2SQL, `text-embedding-3-small` for embeddings |
 
 Keys are stored in your browser's localStorage and sent directly to the backend per-request. They are never written to disk or a database.
+
+### Local model fallback (Ollama)
+
+If no API key is configured, `POST /import-billing` automatically falls back to a local
+model via [Ollama](https://ollama.com) instead of requiring a cloud key. This is
+text-only extraction: the PDF's text layer is pulled out with `pypdf` and sent to the
+model as a prompt. Scanned/image-only statements have no text layer, so those still
+require a cloud API key. AI chat / NL2SQL (`ai_agent.py`, `oracle_ai.py`) is unaffected
+and always requires a cloud key.
+
+`docker compose up` runs Ollama as its own service and automatically pulls the default
+model (`llama3.1`) on first run — no separate install needed, though the first pull
+downloads several GB and takes a while. It runs CPU-only unless you add GPU passthrough
+to the `ollama` service yourself.
+
+For non-Docker local dev, install Ollama, run `ollama serve`, then `ollama pull llama3.1`
+— the backend's built-in default (`http://localhost:11434`) already points at it.
+
+| Env var | Default | Where |
+|---------|---------|-------|
+| `OLLAMA_BASE_URL` | `http://localhost:11434` (backend default); `http://ollama:11434` (docker-compose) | Where the backend looks for Ollama |
+| `OLLAMA_MODEL` | `llama3.1` | Model used for extraction, and what `ollama-pull` fetches in Docker |
 
 ### Oracle 26ai (optional)
 
@@ -195,7 +217,7 @@ water-meter/
 | DELETE | `/readings/{id}` | Delete a reading |
 | GET | `/anomalies` | Spike/anomaly detection results |
 | GET | `/billing-statements` | List imported bills |
-| POST | `/import-billing` | Upload and AI-extract a PDF bill |
+| POST | `/import-billing` | Upload and AI-extract a PDF bill (cloud key if set, else local Ollama) |
 | DELETE | `/billing-statements/{id}` | Delete a bill |
 | GET | `/billing-verify` | Household sum vs bill verification |
 | POST | `/import-csv` | Import meter readings from CSV |

@@ -18,19 +18,14 @@ export default function StatementUpload({
 
   async function handleUpload() {
     if (!pdfFile) return;
-    if (!apiKey) {
-      toast.error("No API key configured — add one in Settings.");
-      return;
-    }
 
     setUploading(true);
     const formData = new FormData();
     formData.append("file", pdfFile);
+    const headers = apiKey ? { "X-Api-Key": apiKey, "X-Api-Provider": apiProvider } : {};
 
     try {
-      const res = await api.post("/import-billing", formData, {
-        headers: { "X-Api-Key": apiKey, "X-Api-Provider": apiProvider },
-      });
+      const res = await api.post("/import-billing", formData, { headers });
       const d = res.data;
       const perUnit = d.cost_per_unit != null ? `$${d.cost_per_unit.toFixed(2)}/unit` : "";
       toast.success(

@@ -1,10 +1,11 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header
+from fastapi.responses import FileResponse
 import csv
 import os
 import base64
 import json
 import re
-from io import StringIO
+from io import StringIO, BytesIO
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from .database import SessionLocal, engine
@@ -18,6 +19,8 @@ from .ai_agent import router as ai_router
 from .oracle_ai import router as oracle_router
 from . import csv_parser
 import anthropic as anthropic_sdk
+import httpx
+from pypdf import PdfReader, PdfWriter
 
 GAP_MULTIPLIER = 1.5
 
@@ -430,6 +433,28 @@ async def delete_reading(reading_id: int):
     db.close()
     return {"ok": True}
 
+OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1")
+
+# Stored PDFs persist in the Docker volume via DATA_DIR=/app/data (see oracle_ai.py's WALLET_DIR for the same pattern).
+DATA_DIR = os.getenv("DATA_DIR", os.path.join(os.path.dirname(__file__), "..", "data"))
+STATEMENTS_DIR = os.path.join(DATA_DIR, "statements")
+
+
+def _statement_pdf_path(year: int, month: int) -> str:
+    return os.path.join(STATEMENTS_DIR, f"{year:04d}_{month:02d}.pdf")
+
+
+def _statement_pdf_path_if_exists(stmt) -> str | None:
+    """Stored PDFs are named after the billing period's END month/year (e.g. a bill
+    covering Nov 2024 - Jan 2025 is filed as 2025_01), matching how utilities usually
+    date the statement itself, not the period it opens with."""
+    if stmt.period_end_year is None or stmt.period_end_month is None:
+        return None
+    path = _statement_pdf_path(stmt.period_end_year, stmt.period_end_month)
+    return path if os.path.exists(path) else None
+
+
 EXTRACTION_PROMPT = """Return ONLY a valid JSON object with these exact keys (no markdown, no explanation):
 {
   "billing_period_start_month": <integer 1-12>,
@@ -440,6 +465,7 @@ EXTRACTION_PROMPT = """Return ONLY a valid JSON object with these exact keys (no
   "total_cost": <float, total amount due in USD>
 }
 Rules:
+- billing_period_start_month/year and billing_period_end_month/year: the start and end of the service/billing period this bill covers. Water bills usually print this as a date range, e.g. "Service from 11/15/2024 to 01/14/2025", a "Billing Period" line, or a meter reading section with a previous-reading date and a current-reading date — use those two dates' months/years. Do not use the bill date or payment due date for these fields.
 - total_units_consumed: the "total consumption in units of water" figure as printed on the statement (1 unit of water = 748 gallons). Report the number exactly as printed — do not convert it to gallons, cubic feet, or any other unit.
 - total_cost: the total amount due for this bill, in US dollars, no currency symbol.
 - Use null for any field that cannot be determined.
@@ -450,6 +476,80 @@ def _parse_ai_json(raw_text: str) -> dict:
     match = re.search(r"```(?:json)?\s*([\s\S]+?)```", raw_text, re.IGNORECASE)
     cleaned = match.group(1).strip() if match else raw_text.strip()
     return json.loads(cleaned)
+
+
+def _first_page_reader(pdf_bytes: bytes) -> PdfReader:
+    """Statements are sometimes followed by a payment stub, terms/conditions insert, or a
+    second account's pages — only page 1 is ever the actual bill, so extraction always
+    operates on that page alone rather than the whole (possibly multi-page) upload."""
+    try:
+        reader = PdfReader(BytesIO(pdf_bytes))
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Could not read this PDF (it may be corrupted or encrypted): {e}")
+    if not reader.pages:
+        raise HTTPException(status_code=422, detail="This PDF has no pages.")
+    return reader
+
+
+def _extract_pdf_text(pdf_bytes: bytes) -> str:
+    reader = _first_page_reader(pdf_bytes)
+    try:
+        text = reader.pages[0].extract_text() or ""
+    except Exception as e:
+        raise HTTPException(status_code=422, detail=f"Could not read this PDF (it may be corrupted or encrypted): {e}")
+    return text.strip()
+
+
+def _first_page_pdf_bytes(pdf_bytes: bytes) -> bytes:
+    """Trims the upload down to page 1 before handing it to a cloud provider, so a
+    multi-page statement (payment stub, inserts, etc.) doesn't confuse extraction."""
+    reader = _first_page_reader(pdf_bytes)
+    writer = PdfWriter()
+    writer.add_page(reader.pages[0])
+    buf = BytesIO()
+    writer.write(buf)
+    return buf.getvalue()
+
+
+def _extract_with_ollama(pdf_bytes: bytes, filename: str) -> str:
+    text = _extract_pdf_text(pdf_bytes)
+    if not text:
+        raise HTTPException(
+            status_code=422,
+            detail="This PDF has no extractable text layer (likely a scanned/image-only document). "
+                   "Configure an Anthropic or OpenAI API key in Settings to import it.",
+        )
+
+    try:
+        response = httpx.post(
+            f"{OLLAMA_BASE_URL}/api/chat",
+            json={
+                "model": OLLAMA_MODEL,
+                "messages": [{"role": "user", "content": f"{EXTRACTION_PROMPT}\n\nStatement text:\n{text}"}],
+                "format": "json",
+                "stream": False,
+                "options": {"temperature": 0},
+            },
+            timeout=120.0,
+        )
+    except httpx.ConnectError as e:
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not reach Ollama at {OLLAMA_BASE_URL}. Start Ollama (`ollama serve`) "
+                   "or configure an Anthropic/OpenAI API key in Settings.",
+        ) from e
+    except httpx.RequestError as e:
+        raise HTTPException(status_code=502, detail=f"Ollama request failed: {e}") from e
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail=f"Ollama returned HTTP {response.status_code}: {response.text[:300]}")
+
+    try:
+        body = response.json()
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=502, detail=f"Ollama returned a non-JSON response: {response.text[:300]}") from e
+
+    return body.get("message", {}).get("content", "")
 
 
 def _extract_with_anthropic(pdf_b64: str, filename: str, api_key: str) -> str:
@@ -489,21 +589,21 @@ async def import_billing(
     x_api_key: str | None = Header(default=None),
     x_api_provider: str | None = Header(default=None),
 ):
-    if not x_api_key:
-        raise HTTPException(status_code=401, detail="No API key configured. Add your Anthropic or OpenAI key in the API Settings panel.")
-
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
 
     pdf_bytes = await file.read()
-    pdf_b64 = base64.standard_b64encode(pdf_bytes).decode("utf-8")
 
-    provider = (x_api_provider or "anthropic").lower()
     try:
-        if provider == "openai":
-            raw_text = _extract_with_openai(pdf_b64, file.filename, x_api_key)
+        if not x_api_key:
+            raw_text = _extract_with_ollama(pdf_bytes, file.filename)
         else:
-            raw_text = _extract_with_anthropic(pdf_b64, file.filename, x_api_key)
+            pdf_b64 = base64.standard_b64encode(_first_page_pdf_bytes(pdf_bytes)).decode("utf-8")
+            provider = (x_api_provider or "anthropic").lower()
+            if provider == "openai":
+                raw_text = _extract_with_openai(pdf_b64, file.filename, x_api_key)
+            else:
+                raw_text = _extract_with_anthropic(pdf_b64, file.filename, x_api_key)
     except HTTPException:
         raise
     except Exception as e:
@@ -525,6 +625,8 @@ async def import_billing(
 
     start_month = int(extracted["billing_period_start_month"])
     start_year = int(extracted["billing_period_start_year"])
+    end_month = int(extracted["billing_period_end_month"])
+    end_year = int(extracted["billing_period_end_year"])
 
     db = SessionLocal()
     existing = db.query(BillingStatement).filter(
@@ -539,11 +641,17 @@ async def import_billing(
     total_cost = float(extracted["total_cost"])
     cost_per_unit = round(total_cost / total_units_consumed, 4) if total_units_consumed else None
 
+    # Filed under the period's END month/year (e.g. Nov-Jan bill -> 2025_01), matching
+    # how utilities date the statement itself rather than the period it opens with.
+    os.makedirs(STATEMENTS_DIR, exist_ok=True)
+    with open(_statement_pdf_path(end_year, end_month), "wb") as f:
+        f.write(pdf_bytes)
+
     stmt = BillingStatement(
         billing_month=start_month,
         billing_year=start_year,
-        period_end_month=int(extracted["billing_period_end_month"]),
-        period_end_year=int(extracted["billing_period_end_year"]),
+        period_end_month=end_month,
+        period_end_year=end_year,
         total_units_consumed=total_units_consumed,
         total_cost=total_cost,
         cost_per_unit=cost_per_unit,
@@ -565,6 +673,7 @@ async def import_billing(
         "total_cost": stmt.total_cost,
         "cost_per_unit": stmt.cost_per_unit,
         "source_filename": stmt.source_filename,
+        "has_pdf": _statement_pdf_path_if_exists(stmt) is not None,
     }
 
 
@@ -589,9 +698,24 @@ async def get_billing_statements():
             "cost_per_unit": s.cost_per_unit,
             "source_filename": s.source_filename,
             "imported_at": s.imported_at.isoformat() if s.imported_at else None,
+            "has_pdf": _statement_pdf_path_if_exists(s) is not None,
         }
         for s in stmts
     ]
+
+
+# Serve the stored PDF for a billing statement
+@app.get("/billing-statements/{stmt_id}/pdf")
+async def get_billing_statement_pdf(stmt_id: int):
+    db = SessionLocal()
+    stmt = db.query(BillingStatement).filter(BillingStatement.id == stmt_id).first()
+    db.close()
+    if not stmt:
+        raise HTTPException(status_code=404, detail="Billing statement not found")
+    path = _statement_pdf_path_if_exists(stmt)
+    if not path:
+        raise HTTPException(status_code=404, detail="No stored PDF for this statement (it may have been imported before file storage was added).")
+    return FileResponse(path, media_type="application/pdf", filename=os.path.basename(path))
 
 
 # Delete a billing statement
@@ -602,9 +726,12 @@ async def delete_billing_statement(stmt_id: int):
     if not stmt:
         db.close()
         raise HTTPException(status_code=404, detail="Billing statement not found")
+    pdf_path = _statement_pdf_path_if_exists(stmt)
     db.delete(stmt)
     db.commit()
     db.close()
+    if pdf_path:
+        os.remove(pdf_path)
     return {"ok": True}
 
 

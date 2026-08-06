@@ -56,7 +56,7 @@ export default function ApiKeySettings({ apiKey, apiProvider, onSave, onClear })
           <span className={`text-sm font-medium ${apiKey ? "text-green-700" : "text-amber-700"}`}>
             {apiKey
               ? `${apiProvider === "openai" ? "OpenAI (GPT-4o)" : "Anthropic (Claude)"} · ${maskKey(apiKey)}`
-              : "No API key — configure to use PDF import and AI chat"}
+              : "No API key — PDF import will use a local model (Ollama); add a key for AI chat and cloud extraction"}
           </span>
         </div>
 

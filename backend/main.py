@@ -127,7 +127,41 @@ def _migrate_billing_statements_schema():
         conn.commit()
 
 
+def _migrate_billing_statements_nullable_units_cost():
+    """
+    total_units_consumed/total_cost used to be NOT NULL, with 0.0 synthesized as a
+    placeholder whenever AI extraction couldn't determine them — making a genuinely
+    free/zero bill indistinguishable from a failed extraction. They're now nullable, so a
+    missing value is stored as NULL and left for manual review/editing instead of a fake
+    0.0. SQLite has no ALTER COLUMN, so an existing NOT NULL table is migrated by
+    recreating it (preserving every existing column and row); a no-op if the table
+    doesn't exist yet or is already nullable.
+    """
+    with engine.connect() as conn:
+        cols = conn.execute(text("PRAGMA table_info(billing_statements)")).fetchall()
+        if not cols:
+            return  # no table yet — create_all below will make one with the right nullability
+
+        by_name = {c[1]: c for c in cols}  # name -> (cid, name, type, notnull, dflt_value, pk)
+        if "total_units_consumed" not in by_name or by_name["total_units_consumed"][3] == 0:
+            return  # already nullable
+
+        col_defs = []
+        for _cid, name, ctype, notnull, _dflt, pk in cols:
+            relax = name in ("total_units_consumed", "total_cost")
+            suffix = " PRIMARY KEY" if pk else (" NOT NULL" if notnull and not relax else "")
+            col_defs.append(f'"{name}" {ctype}{suffix}')
+        col_names = ", ".join(f'"{c[1]}"' for c in cols)
+
+        conn.execute(text(f"CREATE TABLE billing_statements_new ({', '.join(col_defs)})"))
+        conn.execute(text(f"INSERT INTO billing_statements_new SELECT {col_names} FROM billing_statements"))
+        conn.execute(text("DROP TABLE billing_statements"))
+        conn.execute(text("ALTER TABLE billing_statements_new RENAME TO billing_statements"))
+        conn.commit()
+
+
 _migrate_billing_statements_schema()
+_migrate_billing_statements_nullable_units_cost()
 
 # Create tables if they don't exist
 Base.metadata.create_all(bind=engine)
@@ -136,6 +170,10 @@ app = FastAPI()
 class ReadingCreate(BaseModel):
     mi: str
     reading: float
+
+class BillingStatementUpdate(BaseModel):
+    total_units_consumed: Optional[float] = None
+    total_cost: Optional[float] = None
 
 # AI Agent Router
 app.include_router(ai_router, prefix="/ai")
@@ -618,19 +656,23 @@ async def import_billing(
     except json.JSONDecodeError:
         raise HTTPException(status_code=422, detail=f"AI returned non-JSON response: {raw_text[:300]}")
 
-    required = [
-        "billing_period_start_month", "billing_period_start_year",
-        "billing_period_end_month", "billing_period_end_year",
-        "total_units_consumed", "total_cost",
-    ]
-    missing = [f for f in required if extracted.get(f) is None]
-    if missing:
-        raise HTTPException(status_code=422, detail=f"Could not extract: {missing}. Raw: {raw_text[:300]}")
+    # Only the period start is truly required (it's the dedup/identity key below). Every
+    # other field is best-effort: rather than failing the whole import when the model
+    # misses one, leave it blank (None) and let the statement still get created —
+    # total_units_consumed and total_cost are editable afterward in the UI for exactly
+    # this reason, so the user can review and fill in whatever the AI couldn't read.
+    if extracted.get("billing_period_start_month") is None or extracted.get("billing_period_start_year") is None:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Could not determine the billing period start date, which is required to import a statement. Raw AI response: {raw_text[:300]}",
+        )
 
     start_month = int(extracted["billing_period_start_month"])
     start_year = int(extracted["billing_period_start_year"])
-    end_month = int(extracted["billing_period_end_month"])
-    end_year = int(extracted["billing_period_end_year"])
+    end_month = int(extracted["billing_period_end_month"]) if extracted.get("billing_period_end_month") is not None else start_month
+    end_year = int(extracted["billing_period_end_year"]) if extracted.get("billing_period_end_year") is not None else start_year
+    total_units_consumed = float(extracted["total_units_consumed"]) if extracted.get("total_units_consumed") is not None else None
+    total_cost = float(extracted["total_cost"]) if extracted.get("total_cost") is not None else None
 
     db = SessionLocal()
     existing = db.query(BillingStatement).filter(
@@ -641,9 +683,7 @@ async def import_billing(
         db.close()
         raise HTTPException(status_code=409, detail=f"A statement for {start_month}/{start_year} already exists (id={existing.id}).")
 
-    total_units_consumed = float(extracted["total_units_consumed"])
-    total_cost = float(extracted["total_cost"])
-    cost_per_unit = round(total_cost / total_units_consumed, 4) if total_units_consumed else None
+    cost_per_unit = round(total_cost / total_units_consumed, 4) if total_units_consumed and total_cost is not None else None
 
     # Filed under the period's END month/year (e.g. Nov-Jan bill -> 2025_01), matching
     # how utilities date the statement itself rather than the period it opens with.
@@ -722,6 +762,49 @@ async def get_billing_statement_pdf(stmt_id: int):
     return FileResponse(path, media_type="application/pdf", filename=os.path.basename(path))
 
 
+# Manually correct a billing statement's units/cost — e.g. after an AI extraction that
+# missed or misread these fields.
+@app.patch("/billing-statements/{stmt_id}")
+async def update_billing_statement(stmt_id: int, data: BillingStatementUpdate):
+    if data.total_units_consumed is not None and data.total_units_consumed < 0:
+        raise HTTPException(status_code=422, detail="total_units_consumed cannot be negative.")
+    if data.total_cost is not None and data.total_cost < 0:
+        raise HTTPException(status_code=422, detail="total_cost cannot be negative.")
+
+    db = SessionLocal()
+    stmt = db.query(BillingStatement).filter(BillingStatement.id == stmt_id).first()
+    if not stmt:
+        db.close()
+        raise HTTPException(status_code=404, detail="Billing statement not found")
+
+    if data.total_units_consumed is not None:
+        stmt.total_units_consumed = data.total_units_consumed
+    if data.total_cost is not None:
+        stmt.total_cost = data.total_cost
+    stmt.cost_per_unit = (
+        round(stmt.total_cost / stmt.total_units_consumed, 4)
+        if stmt.total_units_consumed and stmt.total_cost is not None
+        else None
+    )
+
+    db.commit()
+    db.refresh(stmt)
+    db.close()
+
+    return {
+        "id": stmt.id,
+        "billing_month": stmt.billing_month,
+        "billing_year": stmt.billing_year,
+        "period_end_month": stmt.period_end_month,
+        "period_end_year": stmt.period_end_year,
+        "total_units_consumed": stmt.total_units_consumed,
+        "total_cost": stmt.total_cost,
+        "cost_per_unit": stmt.cost_per_unit,
+        "source_filename": stmt.source_filename,
+        "has_pdf": _statement_pdf_path_if_exists(stmt) is not None,
+    }
+
+
 # Delete a billing statement
 @app.delete("/billing-statements/{stmt_id}")
 async def delete_billing_statement(stmt_id: int):
@@ -792,7 +875,11 @@ async def billing_verify():
             has_any_data = True
 
         household_sum_units = round(household_sum_units, 3) if has_any_data else None
-        discrepancy_units = round(stmt.total_units_consumed - household_sum_units, 3) if household_sum_units is not None else None
+        discrepancy_units = (
+            round(stmt.total_units_consumed - household_sum_units, 3)
+            if household_sum_units is not None and stmt.total_units_consumed is not None
+            else None
+        )
         money_lost = (
             round(discrepancy_units * stmt.cost_per_unit, 2)
             if discrepancy_units is not None and stmt.cost_per_unit is not None

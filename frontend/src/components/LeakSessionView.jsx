@@ -15,6 +15,12 @@ function timeLabel(isoString) {
   return new Date(isoString).toLocaleString("en-AU", { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
+function differencePerDay(period) {
+  if (period.difference == null) return null;
+  const days = (new Date(period.period_end) - new Date(period.period_start)) / (1000 * 60 * 60 * 24);
+  return days > 0 ? period.difference / days : null;
+}
+
 export default function LeakSessionView({ sessionId }) {
   const [mainFlowSeries, setMainFlowSeries] = useState(null);
   const [periods, setPeriods] = useState(null);
@@ -106,27 +112,34 @@ export default function LeakSessionView({ sessionId }) {
                 <th className="px-4 py-2 text-xs font-semibold uppercase tracking-wider">Submeter Δ</th>
                 <th className="px-4 py-2 text-xs font-semibold uppercase tracking-wider">Main Δ (closest)</th>
                 <th className="px-4 py-2 text-xs font-semibold uppercase tracking-wider">Difference</th>
+                <th className="px-4 py-2 text-xs font-semibold uppercase tracking-wider">Difference / Day</th>
                 <th className="px-4 py-2 text-xs font-semibold uppercase tracking-wider" />
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
-              {periods.map((p, i) => (
-                <tr key={i} className={p.is_leak ? "bg-red-50" : ""}>
-                  <td className="px-4 py-2 text-gray-700">{dayLabel(p.period_start)} → {dayLabel(p.period_end)}</td>
-                  <td className="px-4 py-2 font-mono text-gray-700">{p.submeter_delta} CCF</td>
-                  <td className="px-4 py-2 font-mono text-gray-700">
-                    {p.main_delta != null ? `${p.main_delta} CCF` : <span className="text-gray-400 italic text-xs">no data</span>}
-                  </td>
-                  <td className={`px-4 py-2 font-mono ${p.difference > 0 ? "text-red-600 font-semibold" : "text-gray-600"}`}>
-                    {p.difference != null ? `${p.difference > 0 ? "+" : ""}${p.difference} CCF` : "—"}
-                  </td>
-                  <td className="px-4 py-2">
-                    {p.is_leak && (
-                      <span className="text-xs font-medium text-red-700 bg-red-100 px-2 py-0.5 rounded-full">Potential Leak</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
+              {periods.map((p, i) => {
+                const perDay = differencePerDay(p);
+                return (
+                  <tr key={i} className={p.is_leak ? "bg-red-50" : ""}>
+                    <td className="px-4 py-2 text-gray-700">{dayLabel(p.period_start)} → {dayLabel(p.period_end)}</td>
+                    <td className="px-4 py-2 font-mono text-gray-700">{p.submeter_delta} CCF</td>
+                    <td className="px-4 py-2 font-mono text-gray-700">
+                      {p.main_delta != null ? `${p.main_delta} CCF` : <span className="text-gray-400 italic text-xs">no data</span>}
+                    </td>
+                    <td className={`px-4 py-2 font-mono ${p.difference > 0 ? "text-red-600 font-semibold" : "text-gray-600"}`}>
+                      {p.difference != null ? `${p.difference > 0 ? "+" : ""}${p.difference} CCF` : "—"}
+                    </td>
+                    <td className={`px-4 py-2 font-mono ${perDay > 0 ? "text-red-600 font-semibold" : "text-gray-600"}`}>
+                      {perDay != null ? `${perDay > 0 ? "+" : ""}${perDay.toFixed(3)} CCF/day` : "—"}
+                    </td>
+                    <td className="px-4 py-2">
+                      {p.is_leak && (
+                        <span className="text-xs font-medium text-red-700 bg-red-100 px-2 py-0.5 rounded-full">Potential Leak</span>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

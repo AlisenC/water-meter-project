@@ -22,21 +22,31 @@ LEAK_EPSILON = 1e-6
 MAIN_MATCH_TOLERANCE = timedelta(hours=36)
 
 
-def _daily_main_rows(main_rows_sorted):
-    """One row per calendar day: whichever reading sits closest to that day's
-    midnight. Collapses hourly/15-min main-meter imports down to a daily
-    cadence for the flow line chart, without touching the full-resolution
-    `main_rows_sorted` used elsewhere for nearest-reading matching.
-    """
-    by_day = defaultdict(list)
-    for r in main_rows_sorted:
-        by_day[r.read_time.date()].append(r)
+# Spacing of points on the main meter flow line chart — one point per day.
+FLOW_CHART_INTERVAL = timedelta(days=1)
 
-    daily_rows = []
-    for day in sorted(by_day):
-        midnight = datetime.combine(day, datetime.min.time())
-        daily_rows.append(min(by_day[day], key=lambda r: abs(r.read_time - midnight)))
-    return daily_rows
+
+def _flow_chart_window(submeter_rows):
+    """[start, end] window the main-meter flow chart should cover: from one day
+    before the earliest submeter reading date through the end of the latest
+    submeter reading date. Returns None if there are no submeter readings —
+    the chart has no meaningful range to draw without them.
+    """
+    if not submeter_rows:
+        return None
+    submeter_days = [r.record_date.date() for r in submeter_rows]
+    start = datetime.combine(min(submeter_days) - timedelta(days=1), datetime.min.time())
+    end = datetime.combine(max(submeter_days) + timedelta(days=1), datetime.min.time())
+    return start, end
+
+
+def _flow_chart_grid(start: datetime, end: datetime):
+    grid = []
+    t = start
+    while t <= end:
+        grid.append(t)
+        t += FLOW_CHART_INTERVAL
+    return grid
 
 
 def _closest_main_row(main_rows_sorted, target: datetime):
@@ -211,19 +221,27 @@ async def session_analysis(session_id: int):
     )
     db.close()
 
-    # Main meter's own timeline, collapsed to one reading per calendar day (the
-    # one closest to midnight) regardless of import granularity (daily, hourly,
-    # 15-min, ...) — each point is the delta from the previous day's reading.
-    daily_main_rows = _daily_main_rows(main_rows)
+    # Main meter's own timeline, restricted to the submeter-reported date range
+    # (plus one day of lead-in) and resampled onto one point per day — each
+    # grid mark is resolved to the closest actual main-meter reading (whatever
+    # the import granularity), and each point is the delta from the previous
+    # grid mark's reading. Grid marks with no main-meter reading nearby (outside
+    # MAIN_MATCH_TOLERANCE) are skipped rather than faked.
     main_flow_series = []
-    for i in range(1, len(daily_main_rows)):
-        prev_row = daily_main_rows[i - 1]
-        curr_row = daily_main_rows[i]
-        main_flow_series.append({
-            "period_start": prev_row.read_time.isoformat(),
-            "period_end": curr_row.read_time.isoformat(),
-            "flow": round(curr_row.read_value - prev_row.read_value, 3),
-        })
+    window = _flow_chart_window(submeter_rows)
+    if window is not None:
+        grid = _flow_chart_grid(*window)
+        grid_matches = [(t, _closest_main_row(main_rows, t)) for t in grid]
+        for i in range(1, len(grid_matches)):
+            t_prev, prev_row = grid_matches[i - 1]
+            t_curr, curr_row = grid_matches[i]
+            if prev_row is None or curr_row is None:
+                continue
+            main_flow_series.append({
+                "period_start": t_prev.isoformat(),
+                "period_end": t_curr.isoformat(),
+                "flow": round(curr_row.read_value - prev_row.read_value, 3),
+            })
 
     by_mi = defaultdict(list)
     for r in submeter_rows:

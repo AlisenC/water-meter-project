@@ -1,17 +1,29 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, Fragment } from "react";
 import { toast } from "react-hot-toast";
-import { Trash2, Loader2 } from "lucide-react";
+import { Trash2, Loader2, ChevronDown, ChevronRight } from "lucide-react";
 import { api } from "../api";
+
+// Standard date/time formatting used across the app: en-AU locale, short month.
+// Group headers show the full date; row cells show just the time-of-day since
+// the date is already implied by the group they fall under.
+function dayLabel(isoString) {
+  return new Date(isoString).toLocaleDateString("en-AU", { month: "short", day: "numeric", year: "numeric" });
+}
+
+function timeOfDayLabel(isoString) {
+  return new Date(isoString).toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit" });
+}
 
 const KIND_CONFIG = {
   submeter: {
     title: "Submeter Readings",
     listUrl: (sessionId) => `/leak/sessions/${sessionId}/submeter-readings`,
     deleteUrl: (id) => `/leak/submeter/${id}`,
+    dateKey: "record_date",
     columns: [
       { key: "mi", label: "Meter" },
       { key: "reading", label: "Reading" },
-      { key: "record_date", label: "Date", format: (v) => new Date(v).toLocaleDateString("en-AU") },
+      { key: "record_date", label: "Time", format: (v) => timeOfDayLabel(v) },
       { key: "unit", label: "Unit", format: (v) => (v === 1 ? "CCF" : "gal") },
     ],
   },
@@ -19,13 +31,29 @@ const KIND_CONFIG = {
     title: "Main Meter Readings",
     listUrl: (sessionId) => `/leak/sessions/${sessionId}/main-meter-readings`,
     deleteUrl: (id) => `/leak/main-meter/${id}`,
+    dateKey: "read_time",
     columns: [
-      { key: "read_time", label: "Read Time", format: (v) => new Date(v).toLocaleString("en-AU") },
+      { key: "read_time", label: "Time", format: (v) => timeOfDayLabel(v) },
       { key: "read_value", label: "Read (CCF)" },
       { key: "flow_value", label: "Flow (CCF)", format: (v) => (v != null ? v : "—") },
     ],
   },
 };
+
+// Rows arrive pre-sorted by date from the API, so grouping is a single pass.
+function groupByDate(rows, dateKey) {
+  const groups = [];
+  let current = null;
+  for (const row of rows) {
+    const key = new Date(row[dateKey]).toDateString();
+    if (!current || current.key !== key) {
+      current = { key, dateIso: row[dateKey], rows: [] };
+      groups.push(current);
+    }
+    current.rows.push(row);
+  }
+  return groups;
+}
 
 export default function LeakRawDataTable({ sessionId, kind, onChanged }) {
   const config = KIND_CONFIG[kind];
@@ -33,6 +61,7 @@ export default function LeakRawDataTable({ sessionId, kind, onChanged }) {
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState(new Set());
   const [deleting, setDeleting] = useState(false);
+  const [collapsedGroups, setCollapsedGroups] = useState(new Set());
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -57,6 +86,14 @@ export default function LeakRawDataTable({ sessionId, kind, onChanged }) {
 
   function toggleAll() {
     setSelected((prev) => (prev.size === rows.length ? new Set() : new Set(rows.map((r) => r.id))));
+  }
+
+  function toggleGroup(key) {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
   }
 
   async function handleDeleteSelected() {
@@ -106,18 +143,36 @@ export default function LeakRawDataTable({ sessionId, kind, onChanged }) {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-50">
-              {rows.map((r) => (
-                <tr key={r.id} className={selected.has(r.id) ? "bg-blue-50" : ""}>
-                  <td className="px-4 py-1.5">
-                    <input type="checkbox" checked={selected.has(r.id)} onChange={() => toggleRow(r.id)} />
-                  </td>
-                  {config.columns.map((c) => (
-                    <td key={c.key} className="px-2 py-1.5 font-mono text-gray-700">
-                      {c.format ? c.format(r[c.key]) : r[c.key]}
-                    </td>
-                  ))}
-                </tr>
-              ))}
+              {groupByDate(rows, config.dateKey).map((group) => {
+                const collapsed = collapsedGroups.has(group.key);
+                return (
+                  <Fragment key={group.key}>
+                    <tr className="bg-gray-100">
+                      <td colSpan={config.columns.length + 1} className="p-0">
+                        <button
+                          onClick={() => toggleGroup(group.key)}
+                          className="w-full flex items-center gap-1.5 px-4 py-1 text-xs font-semibold text-gray-600 hover:text-gray-800"
+                        >
+                          {collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+                          {dayLabel(group.dateIso)} ({group.rows.length})
+                        </button>
+                      </td>
+                    </tr>
+                    {!collapsed && group.rows.map((r) => (
+                      <tr key={r.id} className={selected.has(r.id) ? "bg-blue-50" : ""}>
+                        <td className="px-4 py-1.5">
+                          <input type="checkbox" checked={selected.has(r.id)} onChange={() => toggleRow(r.id)} />
+                        </td>
+                        {config.columns.map((c) => (
+                          <td key={c.key} className="px-2 py-1.5 font-mono text-gray-700">
+                            {c.format ? c.format(r[c.key]) : r[c.key]}
+                          </td>
+                        ))}
+                      </tr>
+                    ))}
+                  </Fragment>
+                );
+              })}
             </tbody>
           </table>
         </div>

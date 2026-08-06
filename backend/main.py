@@ -40,13 +40,17 @@ def _household_sum_units(readings_by_mi: dict, billing_month: int, billing_year:
     """Sum of household meter deltas for a billing period, in units of water. None if insufficient data."""
     end_month = period_end_month or billing_month
     end_year = period_end_year or billing_year
-    period_start = date_type(billing_year, billing_month, 1)
+    # Exclusive upper bound: any reading taken during the start month itself still counts as
+    # a valid baseline. Bills only give month-level granularity, but real meter reads land
+    # mid-month, so a strict "before day 1" cutoff would skip the correct baseline reading
+    # entirely and fall back a full extra reading cycle — badly inflating the household sum.
+    period_start_end_excl = date_type(billing_year + 1, 1, 1) if billing_month == 12 else date_type(billing_year, billing_month + 1, 1)
     period_end = date_type(end_year + 1, 1, 1) if end_month == 12 else date_type(end_year, end_month + 1, 1)
 
     total = 0.0
     has_data = False
     for rows in readings_by_mi.values():
-        before_start = [r for r in rows if r[0].date() <= period_start]
+        before_start = [r for r in rows if r[0].date() < period_start_end_excl]
         before_end = [r for r in rows if r[0].date() < period_end]
         if not before_start or not before_end:
             continue
@@ -758,7 +762,15 @@ async def billing_verify():
         end_month = stmt.period_end_month or stmt.billing_month
         end_year = stmt.period_end_year or stmt.billing_year
 
-        period_start = date_type(stmt.billing_year, stmt.billing_month, 1)
+        # Exclusive upper bound: a reading taken during the start month itself is still a
+        # valid baseline. Bills only give month-level granularity, but real meter reads land
+        # mid-month, so a strict "before day 1" cutoff skips the correct baseline reading and
+        # falls back a full extra reading cycle — badly inflating the household sum (see
+        # _household_sum_units above for the same fix applied to the legacy migration path).
+        if stmt.billing_month == 12:
+            period_start_end_excl = date_type(stmt.billing_year + 1, 1, 1)
+        else:
+            period_start_end_excl = date_type(stmt.billing_year, stmt.billing_month + 1, 1)
         if end_month == 12:
             period_end = date_type(end_year + 1, 1, 1)
         else:
@@ -768,7 +780,7 @@ async def billing_verify():
         has_any_data = False
 
         for readings in by_mi.values():
-            before_start = [r for r in readings if r.record_date.date() <= period_start]
+            before_start = [r for r in readings if r.record_date.date() < period_start_end_excl]
             before_end = [r for r in readings if r.record_date.date() < period_end]
             if not before_start or not before_end:
                 continue

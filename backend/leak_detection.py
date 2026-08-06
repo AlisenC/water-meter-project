@@ -22,6 +22,23 @@ LEAK_EPSILON = 1e-6
 MAIN_MATCH_TOLERANCE = timedelta(hours=36)
 
 
+def _daily_main_rows(main_rows_sorted):
+    """One row per calendar day: whichever reading sits closest to that day's
+    midnight. Collapses hourly/15-min main-meter imports down to a daily
+    cadence for the flow line chart, without touching the full-resolution
+    `main_rows_sorted` used elsewhere for nearest-reading matching.
+    """
+    by_day = defaultdict(list)
+    for r in main_rows_sorted:
+        by_day[r.read_time.date()].append(r)
+
+    daily_rows = []
+    for day in sorted(by_day):
+        midnight = datetime.combine(day, datetime.min.time())
+        daily_rows.append(min(by_day[day], key=lambda r: abs(r.read_time - midnight)))
+    return daily_rows
+
+
 def _closest_main_row(main_rows_sorted, target: datetime):
     """Nearest main-meter row to `target` by read_time, within MAIN_MATCH_TOLERANCE.
     main_rows_sorted must already be ordered by read_time. Returns None if there are
@@ -83,7 +100,9 @@ async def get_active_session():
 async def submeter_import_preview(file: UploadFile = File(...)):
     file_bytes = await file.read()
     try:
-        _, valid_rows, error_rows = csv_parser.parse_csv_bytes(file_bytes, file.filename, {}, fmt_override="A")
+        _, valid_rows, error_rows = csv_parser.parse_csv_bytes(
+            file_bytes, file.filename, {}, fmt_override="A", parse_datetime=True
+        )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
@@ -103,7 +122,9 @@ async def submeter_import_preview(file: UploadFile = File(...)):
 async def submeter_import_confirm(file: UploadFile = File(...)):
     file_bytes = await file.read()
     try:
-        _, valid_rows, error_rows = csv_parser.parse_csv_bytes(file_bytes, file.filename, {}, fmt_override="A")
+        _, valid_rows, error_rows = csv_parser.parse_csv_bytes(
+            file_bytes, file.filename, {}, fmt_override="A", parse_datetime=True
+        )
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
@@ -114,7 +135,7 @@ async def submeter_import_confirm(file: UploadFile = File(...)):
             session_id=session.id,
             mi=row["mi"],
             reading=row["reading"],
-            record_date=datetime.combine(row["record_date"], datetime.min.time()),
+            record_date=row["record_date"],
             unit=row["unit"],
         ))
     db.commit()
@@ -190,12 +211,14 @@ async def session_analysis(session_id: int):
     )
     db.close()
 
-    # Main meter's own timeline, at whatever granularity it was imported (daily,
-    # hourly, 15-min, ...) — each point is the delta from the previous reading.
+    # Main meter's own timeline, collapsed to one reading per calendar day (the
+    # one closest to midnight) regardless of import granularity (daily, hourly,
+    # 15-min, ...) — each point is the delta from the previous day's reading.
+    daily_main_rows = _daily_main_rows(main_rows)
     main_flow_series = []
-    for i in range(1, len(main_rows)):
-        prev_row = main_rows[i - 1]
-        curr_row = main_rows[i]
+    for i in range(1, len(daily_main_rows)):
+        prev_row = daily_main_rows[i - 1]
+        curr_row = daily_main_rows[i]
         main_flow_series.append({
             "period_start": prev_row.read_time.isoformat(),
             "period_end": curr_row.read_time.isoformat(),

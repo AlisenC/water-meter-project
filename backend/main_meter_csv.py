@@ -47,9 +47,13 @@ def parse_main_meter_csv_bytes(file_bytes: bytes, filename: str) -> tuple[list[d
 
         flow_time = None
         if row["flow_time"]:
-            try:
-                flow_time = datetime.strptime(row["flow_time"], "%Y-%m-%d")
-            except ValueError:
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+                try:
+                    flow_time = datetime.strptime(row["flow_time"], fmt)
+                    break
+                except ValueError:
+                    continue
+            if flow_time is None:
                 error_rows.append({"row_num": row_num, "reason": "invalid_flow_time", "raw_value": row["flow_time"], "filename": filename})
                 continue
 

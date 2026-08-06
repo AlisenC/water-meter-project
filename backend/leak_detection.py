@@ -1,5 +1,5 @@
 from collections import defaultdict
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 
@@ -14,6 +14,25 @@ router = APIRouter()
 # Purely for float noise around zero — not a business tolerance like billing's
 # DISCREPANCY_TOLERANCE_UNITS. Any real excess flags as a potential leak.
 LEAK_EPSILON = 1e-6
+
+# How far (in either direction) a main-meter reading may sit from a submeter-driven
+# period boundary and still be treated as "the closest" reading for that boundary.
+# Guards against nearest-neighbor matching across a gap in main-meter coverage
+# (e.g. main data only exists for January but the submeter period is in August).
+MAIN_MATCH_TOLERANCE = timedelta(hours=36)
+
+
+def _closest_main_row(main_rows_sorted, target: datetime):
+    """Nearest main-meter row to `target` by read_time, within MAIN_MATCH_TOLERANCE.
+    main_rows_sorted must already be ordered by read_time. Returns None if there are
+    no rows, or the nearest one is farther than the tolerance allows.
+    """
+    if not main_rows_sorted:
+        return None
+    best = min(main_rows_sorted, key=lambda r: abs(r.read_time - target))
+    if abs(best.read_time - target) > MAIN_MATCH_TOLERANCE:
+        return None
+    return best
 
 
 def _get_or_create_active_session(db) -> LeakSession:
@@ -159,8 +178,8 @@ async def session_analysis(session_id: int):
 
     main_rows = (
         db.query(LeakMainMeterReading)
-        .filter(LeakMainMeterReading.session_id == session_id, LeakMainMeterReading.flow_time.isnot(None))
-        .order_by(LeakMainMeterReading.flow_time)
+        .filter(LeakMainMeterReading.session_id == session_id)
+        .order_by(LeakMainMeterReading.read_time)
         .all()
     )
     submeter_rows = (
@@ -171,53 +190,74 @@ async def session_analysis(session_id: int):
     )
     db.close()
 
+    # Main meter's own timeline, at whatever granularity it was imported (daily,
+    # hourly, 15-min, ...) — each point is the delta from the previous reading.
+    main_flow_series = []
+    for i in range(1, len(main_rows)):
+        prev_row = main_rows[i - 1]
+        curr_row = main_rows[i]
+        main_flow_series.append({
+            "period_start": prev_row.read_time.isoformat(),
+            "period_end": curr_row.read_time.isoformat(),
+            "flow": round(curr_row.read_value - prev_row.read_value, 3),
+        })
+
     by_mi = defaultdict(list)
     for r in submeter_rows:
         by_mi[r.mi].append(r)
 
-    # Mirrors backend/main.py's _household_sum_units bracket pattern, but per-day and
-    # session-scoped. The first main-meter row only supplies a baseline boundary — like
-    # the existing monthly comparison charts, a period needs a *previous* reading to diff against.
-    periods = []
-    for i in range(1, len(main_rows)):
-        prev_row = main_rows[i - 1]
-        curr_row = main_rows[i]
-        period_start = prev_row.flow_time
-        period_end = curr_row.flow_time
+    # Periods are anchored to the submeters' own reporting cadence (sparse and
+    # irregular) rather than the main meter's, since that's what actually varies
+    # here. For each period, the main-meter side of the comparison is resolved by
+    # finding the closest main-meter reading to each boundary — this is what lets
+    # the main meter be imported at any granularity (daily, hourly, 15-min) without
+    # requiring it to align with submeter timestamps.
+    submeter_times = sorted({r.record_date for r in submeter_rows})
 
-        submeter_sum = 0.0
+    periods = []
+    for i in range(1, len(submeter_times)):
+        t_prev = submeter_times[i - 1]
+        t_curr = submeter_times[i]
+
+        submeter_delta = 0.0
         has_submeter_data = False
         for rows in by_mi.values():
-            before_start = [r for r in rows if r.record_date <= period_start]
-            before_end = [r for r in rows if r.record_date <= period_end]
+            before_start = [r for r in rows if r.record_date <= t_prev]
+            before_end = [r for r in rows if r.record_date <= t_curr]
             if not before_start or not before_end:
                 continue
             baseline = before_start[-1]
             end_rdg = before_end[-1]
             if baseline.id == end_rdg.id:
                 continue
-            submeter_sum += max(0.0, to_units(end_rdg.reading, end_rdg.unit) - to_units(baseline.reading, baseline.unit))
+            submeter_delta += max(0.0, to_units(end_rdg.reading, end_rdg.unit) - to_units(baseline.reading, baseline.unit))
             has_submeter_data = True
 
-        main_flow = curr_row.flow_value
-        submeter_sum = round(submeter_sum, 3) if has_submeter_data else None
-        difference = (
-            round(submeter_sum - main_flow, 3)
-            if submeter_sum is not None and main_flow is not None
-            else None
-        )
+        if not has_submeter_data:
+            continue
+
+        main_start_row = _closest_main_row(main_rows, t_prev)
+        main_end_row = _closest_main_row(main_rows, t_curr)
+
+        main_delta = None
+        if main_start_row is not None and main_end_row is not None and main_start_row.id != main_end_row.id:
+            main_delta = round(main_end_row.read_value - main_start_row.read_value, 3)
+
+        submeter_delta = round(submeter_delta, 3)
+        difference = round(main_delta - submeter_delta, 3) if main_delta is not None else None
 
         periods.append({
-            "period_start": period_start.isoformat(),
-            "period_end": period_end.isoformat(),
-            "main_flow": main_flow,
-            "submeter_sum": submeter_sum,
+            "period_start": t_prev.isoformat(),
+            "period_end": t_curr.isoformat(),
+            "submeter_delta": submeter_delta,
+            "main_delta": main_delta,
+            "main_period_start_actual": main_start_row.read_time.isoformat() if main_start_row else None,
+            "main_period_end_actual": main_end_row.read_time.isoformat() if main_end_row else None,
             "difference": difference,
-            "has_submeter_data": has_submeter_data,
             "is_leak": difference is not None and difference > LEAK_EPSILON,
         })
 
-    return periods
+    return {"main_flow_series": main_flow_series, "periods": periods}
 
 
 @router.post("/sessions/{session_id}/archive")
@@ -261,3 +301,94 @@ async def restore_session(session_id: int):
     result = _session_summary(db, session)
     db.close()
     return result
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_session(session_id: int):
+    db = SessionLocal()
+    session = db.query(LeakSession).filter(LeakSession.id == session_id).first()
+    if not session:
+        db.close()
+        raise HTTPException(status_code=404, detail="Leak session not found")
+    if session.status == "active":
+        db.close()
+        raise HTTPException(status_code=400, detail="Cannot delete the active session — archive or restore another session first")
+
+    db.query(LeakSubmeterReading).filter(LeakSubmeterReading.session_id == session_id).delete()
+    db.query(LeakMainMeterReading).filter(LeakMainMeterReading.session_id == session_id).delete()
+    db.delete(session)
+    db.commit()
+    db.close()
+    return {"ok": True}
+
+
+@router.get("/sessions/{session_id}/submeter-readings")
+async def list_submeter_readings(session_id: int):
+    db = SessionLocal()
+    session = db.query(LeakSession).filter(LeakSession.id == session_id).first()
+    if not session:
+        db.close()
+        raise HTTPException(status_code=404, detail="Leak session not found")
+    rows = (
+        db.query(LeakSubmeterReading)
+        .filter(LeakSubmeterReading.session_id == session_id)
+        .order_by(LeakSubmeterReading.record_date)
+        .all()
+    )
+    db.close()
+    return [
+        {"id": r.id, "mi": r.mi, "reading": r.reading, "record_date": r.record_date.isoformat(), "unit": r.unit}
+        for r in rows
+    ]
+
+
+@router.get("/sessions/{session_id}/main-meter-readings")
+async def list_main_meter_readings(session_id: int):
+    db = SessionLocal()
+    session = db.query(LeakSession).filter(LeakSession.id == session_id).first()
+    if not session:
+        db.close()
+        raise HTTPException(status_code=404, detail="Leak session not found")
+    rows = (
+        db.query(LeakMainMeterReading)
+        .filter(LeakMainMeterReading.session_id == session_id)
+        .order_by(LeakMainMeterReading.read_time)
+        .all()
+    )
+    db.close()
+    return [
+        {
+            "id": r.id,
+            "read_time": r.read_time.isoformat(),
+            "read_value": r.read_value,
+            "flow_time": r.flow_time.isoformat() if r.flow_time else None,
+            "flow_value": r.flow_value,
+        }
+        for r in rows
+    ]
+
+
+@router.delete("/submeter/{reading_id}")
+async def delete_submeter_reading(reading_id: int):
+    db = SessionLocal()
+    reading = db.query(LeakSubmeterReading).filter(LeakSubmeterReading.id == reading_id).first()
+    if not reading:
+        db.close()
+        raise HTTPException(status_code=404, detail="Submeter reading not found")
+    db.delete(reading)
+    db.commit()
+    db.close()
+    return {"ok": True}
+
+
+@router.delete("/main-meter/{reading_id}")
+async def delete_main_meter_reading(reading_id: int):
+    db = SessionLocal()
+    reading = db.query(LeakMainMeterReading).filter(LeakMainMeterReading.id == reading_id).first()
+    if not reading:
+        db.close()
+        raise HTTPException(status_code=404, detail="Main meter reading not found")
+    db.delete(reading)
+    db.commit()
+    db.close()
+    return {"ok": True}

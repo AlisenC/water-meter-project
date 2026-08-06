@@ -60,6 +60,20 @@ export default function LeakDetectionTool() {
     }
   }
 
+  async function handleDeleteSession(session) {
+    if (!window.confirm(
+      `Permanently delete this archived session (${sessionRangeLabel(session)}, ${session.submeter_row_count} submeter rows, ${session.main_meter_row_count} main meter rows)? This cannot be undone.`
+    )) return;
+    try {
+      await api.delete(`/leak/sessions/${session.id}`);
+      toast.success("Session deleted.");
+      if (expandedId === session.id) setExpandedId(null);
+      await refresh();
+    } catch (err) {
+      toast.error(err.response?.data?.detail ?? "Delete failed.");
+    }
+  }
+
   if (loading) return <p className="text-sm text-gray-400 italic">Loading…</p>;
 
   return (
@@ -147,6 +161,12 @@ export default function LeakDetectionTool() {
                       className="bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-medium"
                     >
                       Restore
+                    </button>
+                    <button
+                      onClick={() => handleDeleteSession(s)}
+                      className="border border-red-300 hover:bg-red-50 text-red-700 px-3 py-1.5 rounded-lg text-xs font-medium"
+                    >
+                      Delete
                     </button>
                   </div>
                 </div>

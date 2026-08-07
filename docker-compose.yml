@@ -3,9 +3,9 @@ services:
     build:
       context: ./backend
     ports:
-      - "8000:8000"
+      - "8500:8000"
     volumes:
-      - water_meter_data:/app/data
+      - ./data:/app/data
     environment:
       - DATABASE_URL=sqlite:////app/data/water_meter.db
       - DATA_DIR=/app/data

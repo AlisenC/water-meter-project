@@ -1,21 +1,23 @@
 import {
   LayoutDashboard,
   BarChart2,
-  FileText,
+  Receipt,
   ClipboardList,
   MessageSquare,
   Settings,
   ChevronLeft,
   ChevronRight,
   Droplets,
+  AlertTriangle,
 } from "lucide-react";
 
 const NAV_ITEMS = [
-  { id: "overview",  label: "Overview",       icon: LayoutDashboard },
-  { id: "analysis",  label: "Analysis",       icon: BarChart2 },
-  { id: "bills",     label: "Bills & Imports",icon: FileText },
-  { id: "readings",  label: "Readings",       icon: ClipboardList },
-  { id: "ai",        label: "AI Assistant",   icon: MessageSquare },
+  { id: "overview",    label: "Overview",       icon: LayoutDashboard },
+  { id: "analysis",    label: "Analysis",       icon: BarChart2 },
+  { id: "statements",  label: "Bill Statements",icon: Receipt },
+  { id: "readings",    label: "Readings",       icon: ClipboardList },
+  { id: "leak",        label: "Leak Detection", icon: AlertTriangle },
+  { id: "ai",          label: "AI Assistant",   icon: MessageSquare },
 ];
 
 function NavBadge({ count }) {
@@ -76,7 +78,7 @@ export default function Sidebar({
       <nav className="flex-1 py-3 px-2 space-y-0.5 overflow-y-auto overflow-x-hidden">
         {NAV_ITEMS.map(({ id, label, icon: Icon }) => {
           const isActive = activeSection === id;
-          const badge = id === "analysis" ? anomalyCount : id === "bills" ? billingCount : 0;
+          const badge = id === "analysis" ? anomalyCount : id === "statements" ? billingCount : 0;
           const oracleDot = id === "ai" ? (oracleConnected ? "green" : "gray") : null;
 
           return (

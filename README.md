@@ -19,6 +19,17 @@ A full-stack water meter tracking and analysis app with AI-powered analysis and 
 - Household sum verification against billing statements
 - Manual reading entry, search/filter, and CSV export
 
+### Daily Leak Detection
+A short-term workspace for spotting leaks between bills, kept completely separate from the monthly billing data above — nothing imported here touches the `Readings` table or billing statements.
+
+- Import daily **submeter** readings and daily **main meter** readings (AMI "range export" CSV) into an active session
+- Automatic daily-delta comparison: sums all submeter deltas and checks them against the main meter's delta for the same period
+- Flags a **potential leak** whenever the submeter total exceeds the main meter, with a comparison line chart and a per-day table
+- **Archive Session** clears the active workspace for a fresh investigation while keeping the archived data viewable
+- **Restore** brings an archived session back as the active workspace at any time
+
+See [Using Daily Leak Detection](#using-daily-leak-detection) below for the full workflow.
+
 ### AI Assistant
 Three tabs in one section — no Oracle required for Chat:
 
@@ -153,6 +164,41 @@ Both options can coexist — UI credentials take priority over env vars when pro
 
 ---
 
+## Using Daily Leak Detection
+
+Open the **Leak Detection** tab in the sidebar. It always shows one **active session** — a clean workspace for the leak investigation currently in progress — plus a list of **archived sessions** from past investigations.
+
+### 1. Import daily submeter readings
+
+Take a daily photo of each submeter and transcribe it into a CSV (MVP is manual entry; an AI-assisted photo importer is planned for later):
+
+```csv
+mi,reading,record_date,unit
+Unit1,100.0,2026-08-01,1
+Unit2,50.0,2026-08-01,1
+```
+
+- `mi` — the household/submeter identifier
+- `reading` — the cumulative meter reading
+- `record_date` — `YYYY-MM-DD`
+- `unit` — `1` if the meter reads in units of water (CCF), `0` if it reads in gallons (converted automatically at `1 unit = 748 gallons`)
+
+Upload it under **Import Daily Submeter Readings**, review the preview (row count / errors), then **Confirm Import**. Repeat this daily to build up a run of readings.
+
+### 2. Import daily main meter readings
+
+Export a "range export" CSV from your main meter's AMI provider (columns: `Account_ID, Meter_ID, Meter_SN, Read_Time, Timezone, Read, Read_Unit, Read_Method, Flow_Time, Flow_Unit, Flow, Register`) and upload it under **Import Daily Main Meter Readings**. Readings must be in `CCF`; each row's `Flow` value is used directly as that period's main-meter delta.
+
+### 3. Review the comparison
+
+Once both sides have at least two days of data, the active session shows a line chart and a table comparing the **main meter flow** against the **summed submeter deltas** for each matching period. Any day where the submeter total exceeds the main meter's flow is highlighted red and marked **Potential Leak**.
+
+### 4. Archive when the investigation is done
+
+Click **Archive Session** and confirm. The active workspace resets to empty for the next investigation, while the archived session (and all its data) stays viewable under the **Archived Sessions** tab. Click **Restore** on an archived session to bring it back as the active workspace at any time — if the current active workspace has data of its own, it's archived first so nothing is lost.
+
+---
+
 ## Project structure
 
 ```
@@ -163,6 +209,9 @@ water-meter/
 │   ├── database.py          # DB engine and session
 │   ├── ai_agent.py          # AI chat and PDF bill extraction
 │   ├── csv_parser.py        # CSV import with format detection
+│   ├── units.py             # Shared gallons↔units-of-water conversion
+│   ├── leak_detection.py    # /leak/* endpoints (sessions, imports, analysis)
+│   ├── main_meter_csv.py    # AMI "range export" main meter CSV parser
 │   ├── oracle_connection.py # Oracle connection pool + per-request creds
 │   ├── oracle_ai.py         # /oracle/* endpoints (status, sync, NL2SQL, vector search)
 │   └── requirements.txt
@@ -177,6 +226,9 @@ water-meter/
 │           ├── BillingImport.jsx          # PDF import + billing table
 │           ├── ImportWizard.jsx           # CSV import wizard
 │           ├── ReadingTable.jsx           # Readings table with search + export
+│           ├── LeakDetectionTool.jsx      # Daily Leak Detection tab (active/archived sessions)
+│           ├── LeakSessionView.jsx        # Leak session comparison chart + table
+│           ├── LeakCsvImport.jsx          # Single-file CSV preview → confirm widget
 │           ├── AIAssistant.jsx            # Chat / Ask Oracle / Semantic Search tabs
 │           ├── ApiKeySettings.jsx         # AI provider key management
 │           └── OracleSettings.jsx         # Oracle credential entry + sync actions
@@ -199,6 +251,15 @@ water-meter/
 | DELETE | `/billing-statements/{id}` | Delete a bill |
 | GET | `/billing-verify` | Household sum vs bill verification |
 | POST | `/import-csv` | Import meter readings from CSV |
+| GET | `/leak/sessions` | List all daily leak detection sessions |
+| GET | `/leak/sessions/active` | Get (or create) the active leak detection session |
+| GET | `/leak/sessions/{id}/analysis` | Per-day main-meter-vs-submeter comparison and leak flags |
+| POST | `/leak/submeter/import/preview` | Preview a daily submeter CSV |
+| POST | `/leak/submeter/import/confirm` | Import a daily submeter CSV into the active session |
+| POST | `/leak/main-meter/import/preview` | Preview a daily main meter (AMI) CSV |
+| POST | `/leak/main-meter/import/confirm` | Import a daily main meter CSV into the active session |
+| POST | `/leak/sessions/{id}/archive` | Archive the active session, starting a fresh workspace |
+| POST | `/leak/sessions/{id}/restore` | Restore an archived session as the active workspace |
 | POST | `/ai/ask` | Chat with AI about your data |
 | GET | `/oracle/status` | Oracle connection health check |
 | POST | `/oracle/init` | Create Oracle tables |

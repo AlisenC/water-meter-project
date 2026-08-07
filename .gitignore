@@ -19,6 +19,7 @@ Thumbs.db
 
 # Local dev files
 prompt.md
+test_data/
 
 # Oracle wallet files (contain certificates and credentials)
 data/

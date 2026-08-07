@@ -1,5 +1,5 @@
 import csv
-from datetime import date
+from datetime import date, datetime
 from io import StringIO
 
 FORMATS = {
@@ -40,6 +40,7 @@ def parse_csv_bytes(
     filename: str,
     existing_units: dict[str, int],
     fmt_override: str | None = None,
+    parse_datetime: bool = False,
 ) -> tuple[str, list[dict], list[dict]]:
     text = file_bytes.decode("utf-8-sig")
 
@@ -95,13 +96,27 @@ def parse_csv_bytes(
             error_rows.append({"row_num": row_num, "reason": "invalid_reading", "raw_value": raw_reading, "filename": filename})
             continue
 
-        # Validate date
+        # Validate date. When parse_datetime is set (leak detection's submeter
+        # imports, which need sub-day granularity), record_date must carry an
+        # explicit "YYYY-MM-DD HH:MM:SS" timestamp — a bare date is rejected
+        # rather than silently defaulted to midnight, since leak analysis needs
+        # the real time-of-day to line up submeter readings against each other.
         raw_date = mapped.get("record_date", "")
-        try:
-            parsed_date = date.fromisoformat(raw_date) if fmt["date_fmt"] == "%Y-%m-%d" else _strpdate(raw_date, fmt["date_fmt"])
-        except (ValueError, AttributeError):
-            error_rows.append({"row_num": row_num, "reason": "invalid_date", "raw_value": raw_date, "filename": filename})
-            continue
+        if parse_datetime and fmt["date_fmt"] == "%Y-%m-%d":
+            if len(raw_date.strip()) <= 10:
+                error_rows.append({"row_num": row_num, "reason": "missing_timestamp", "raw_value": raw_date, "filename": filename})
+                continue
+            try:
+                parsed_date = datetime.fromisoformat(raw_date)
+            except (ValueError, AttributeError):
+                error_rows.append({"row_num": row_num, "reason": "invalid_date", "raw_value": raw_date, "filename": filename})
+                continue
+        else:
+            try:
+                parsed_date = date.fromisoformat(raw_date) if fmt["date_fmt"] == "%Y-%m-%d" else _strpdate(raw_date, fmt["date_fmt"])
+            except (ValueError, AttributeError):
+                error_rows.append({"row_num": row_num, "reason": "invalid_date", "raw_value": raw_date, "filename": filename})
+                continue
 
         mi = mapped.get("mi", "")
         if not mi:

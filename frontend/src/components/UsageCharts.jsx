@@ -2,14 +2,9 @@ import {
   LineChart, Line, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
 } from "recharts";
+import { toUnits } from "../utils/units";
 
 const COLORS = ["#3b82f6", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#ec4899"];
-const CUBIC_FEET_TO_GALLONS = 7.48052;
-
-function toGallons(reading, unit) {
-  const val = Number(reading) || 0;
-  return unit === 1 ? val * CUBIC_FEET_TO_GALLONS : val;
-}
 
 function formatDate(dateStr) {
   return new Date(dateStr).toLocaleDateString("en-AU", { month: "short", year: "numeric" });
@@ -47,9 +42,9 @@ export default function UsageCharts({ readings }) {
     const curr = group[group.length - 1];
     const consumption = Math.max(
       0,
-      toGallons(curr.reading, curr.unit) - toGallons(prev.reading, prev.unit)
+      toUnits(curr.reading, curr.unit) - toUnits(prev.reading, prev.unit)
     );
-    return [{ household: mi, total: parseFloat(consumption.toFixed(2)) }];
+    return [{ household: mi, total: parseFloat(consumption.toFixed(3)) }];
   });
 
   const pieData = barData
@@ -62,9 +57,9 @@ export default function UsageCharts({ readings }) {
   for (const mi of allMeters) {
     const group = allGroups[mi];
     for (let i = 1; i < group.length; i++) {
-      const prev = toGallons(group[i - 1].reading, group[i - 1].unit);
-      const curr = toGallons(group[i].reading, group[i].unit);
-      const delta = parseFloat(Math.max(0, curr - prev).toFixed(2));
+      const prev = toUnits(group[i - 1].reading, group[i - 1].unit);
+      const curr = toUnits(group[i].reading, group[i].unit);
+      const delta = parseFloat(Math.max(0, curr - prev).toFixed(3));
       const date = formatDate(group[i].record_date);
       if (!dateMap[date]) dateMap[date] = { date };
       dateMap[date][mi] = delta;
@@ -82,7 +77,7 @@ export default function UsageCharts({ readings }) {
     const mainPrev = mainReadings[i - 1];
     const mainCurr = mainReadings[i];
     const mainDelta = parseFloat(
-      Math.max(0, toGallons(mainCurr.reading, mainCurr.unit) - toGallons(mainPrev.reading, mainPrev.unit)).toFixed(2)
+      Math.max(0, toUnits(mainCurr.reading, mainCurr.unit) - toUnits(mainPrev.reading, mainPrev.unit)).toFixed(3)
     );
 
     // Sum household consumption for readings that fall in this same period
@@ -99,11 +94,11 @@ export default function UsageCharts({ readings }) {
       const before = group.filter((r) => new Date(r.record_date) <= periodStart).pop();
       const after = group.filter((r) => new Date(r.record_date) <= periodEnd).pop();
       if (before && after && before !== after) {
-        householdSum += Math.max(0, toGallons(after.reading, after.unit) - toGallons(before.reading, before.unit));
+        householdSum += Math.max(0, toUnits(after.reading, after.unit) - toUnits(before.reading, before.unit));
       }
     }
-    householdSum = parseFloat(householdSum.toFixed(2));
-    const difference = parseFloat((mainDelta - householdSum).toFixed(2));
+    householdSum = parseFloat(householdSum.toFixed(3));
+    const difference = parseFloat((mainDelta - householdSum).toFixed(3));
 
     comparisonData.push({
       date: formatDate(mainCurr.record_date),
@@ -125,15 +120,15 @@ export default function UsageCharts({ readings }) {
           {latest && (
             <div className="flex gap-6 text-sm mb-3">
               <span>
-                Main: <span className="font-mono font-semibold">{latest["Main Meter"]} gal</span>
+                Main: <span className="font-mono font-semibold">{latest["Main Meter"]} units</span>
               </span>
               <span>
-                Households: <span className="font-mono font-semibold">{latest["Household Sum"]} gal</span>
+                Households: <span className="font-mono font-semibold">{latest["Household Sum"]} units</span>
               </span>
               <span>
                 Unaccounted:{" "}
                 <span className={`font-mono font-semibold ${latest["Unaccounted"] > 0 ? "text-orange-600" : "text-green-600"}`}>
-                  {latest["Unaccounted"] > 0 ? "+" : ""}{latest["Unaccounted"]} gal
+                  {latest["Unaccounted"] > 0 ? "+" : ""}{latest["Unaccounted"]} units
                 </span>
               </span>
             </div>
@@ -143,8 +138,8 @@ export default function UsageCharts({ readings }) {
               <LineChart data={comparisonData}>
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-                <YAxis unit=" gal" tick={{ fontSize: 11 }} />
-                <Tooltip formatter={(v) => `${v} gal`} />
+                <YAxis unit=" units" tick={{ fontSize: 11 }} />
+                <Tooltip formatter={(v) => `${v} units`} />
                 <Legend />
                 <Line type="monotone" dataKey="Main Meter" stroke="#1d4ed8" strokeWidth={2} dot={false} />
                 <Line type="monotone" dataKey="Household Sum" stroke="#10b981" strokeWidth={2} dot={false} />
@@ -165,8 +160,8 @@ export default function UsageCharts({ readings }) {
             <LineChart data={lineData}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="date" tick={{ fontSize: 11 }} />
-              <YAxis unit=" gal" tick={{ fontSize: 11 }} />
-              <Tooltip formatter={(v) => `${v} gal`} />
+              <YAxis unit=" units" tick={{ fontSize: 11 }} />
+              <Tooltip formatter={(v) => `${v} units`} />
               <Legend />
               {allMeters.map((mi, i) => (
                 <Line
@@ -191,8 +186,8 @@ export default function UsageCharts({ readings }) {
             <BarChart data={barData}>
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="household" tick={{ fontSize: 11 }} />
-              <YAxis unit=" gal" tick={{ fontSize: 11 }} />
-              <Tooltip formatter={(v) => `${v} gal`} />
+              <YAxis unit=" units" tick={{ fontSize: 11 }} />
+              <Tooltip formatter={(v) => `${v} units`} />
               <Bar dataKey="total" fill="#3b82f6" />
             </BarChart>
           </ResponsiveContainer>
@@ -224,7 +219,7 @@ export default function UsageCharts({ readings }) {
                   <Cell key={i} fill={COLORS[i % COLORS.length]} />
                 ))}
               </Pie>
-              <Tooltip formatter={(v) => `${v} gal`} />
+              <Tooltip formatter={(v) => `${v} units`} />
               <Legend />
             </PieChart>
           </ResponsiveContainer>

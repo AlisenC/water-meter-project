@@ -6,6 +6,7 @@ import json
 import re
 from io import StringIO
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
 from .database import SessionLocal, engine
 from .models import Base, Reading, BillingStatement
 from datetime import datetime, date as date_type
@@ -15,10 +16,108 @@ from collections import defaultdict
 from statistics import median
 from .ai_agent import router as ai_router
 from .oracle_ai import router as oracle_router
+from .leak_detection import router as leak_router
 from . import csv_parser
+from .units import to_units as _to_units
 import anthropic as anthropic_sdk
 
 GAP_MULTIPLIER = 1.5
+
+DISCREPANCY_TOLERANCE_UNITS = 1.0  # ~748 gallons; a statement/household-sum pair within this is considered "matching"
+# What 748 gallons would have converted to under the old (mislabeled) "kilolitres" constant —
+# used only by the one-time migration below to guess whether legacy data needs converting.
+_LEGACY_KL_PER_UNIT = 0.748 * 0.00378541
+
+
+def _household_sum_units(readings_by_mi: dict, billing_month: int, billing_year: int,
+                          period_end_month: int | None, period_end_year: int | None) -> float | None:
+    """Sum of household meter deltas for a billing period, in units of water. None if insufficient data."""
+    end_month = period_end_month or billing_month
+    end_year = period_end_year or billing_year
+    period_start = date_type(billing_year, billing_month, 1)
+    period_end = date_type(end_year + 1, 1, 1) if end_month == 12 else date_type(end_year, end_month + 1, 1)
+
+    total = 0.0
+    has_data = False
+    for rows in readings_by_mi.values():
+        before_start = [r for r in rows if r[0].date() <= period_start]
+        before_end = [r for r in rows if r[0].date() < period_end]
+        if not before_start or not before_end:
+            continue
+        baseline = before_start[-1]
+        end_rdg = before_end[-1]
+        if baseline[0] == end_rdg[0]:
+            continue
+        total += max(0.0, _to_units(end_rdg[1], end_rdg[2]) - _to_units(baseline[1], baseline[2]))
+        has_data = True
+    return round(total, 3) if has_data else None
+
+
+def _migrate_billing_statements_schema():
+    """
+    One-time migration for deployments that already have billing_statements rows under
+    the old (mislabeled) schema — total_consumption_kl / billing_cost_aud. Adds the new
+    columns and backfills them without dropping the old ones, so a deployed volume's data
+    survives this schema change rather than needing to be wiped.
+
+    The old extraction prompt asked the AI for "kilolitres," but real US water bills don't
+    print kL — they print "units of water." So an old row's stored number is most likely
+    already a units-of-water figure under a wrong label, not a true kL conversion. Since we
+    can't know for certain which it was, we cross-check each row against the actual summed
+    household meter deltas for that billing period (when available) and pick whichever
+    interpretation — as-is, or divided by the old kL-per-unit constant — lands closer to
+    that independent reference. Falls back to "as-is" when there's no reading data to check
+    against.
+    """
+    with engine.connect() as conn:
+        cols = {row[1] for row in conn.execute(text("PRAGMA table_info(billing_statements)"))}
+        if not cols or "total_units_consumed" in cols or "total_consumption_kl" not in cols:
+            return  # no table yet (create_all will make one), or already migrated
+
+        conn.execute(text("ALTER TABLE billing_statements ADD COLUMN total_units_consumed FLOAT"))
+        conn.execute(text("ALTER TABLE billing_statements ADD COLUMN total_cost FLOAT"))
+        conn.execute(text("ALTER TABLE billing_statements ADD COLUMN cost_per_unit FLOAT"))
+        conn.commit()
+
+        old_rows = conn.execute(text(
+            "SELECT id, billing_month, billing_year, period_end_month, period_end_year,"
+            " total_consumption_kl, billing_cost_aud FROM billing_statements"
+        )).fetchall()
+        reading_rows = conn.execute(text("SELECT mi, reading, record_date, unit FROM readings")).fetchall()
+
+    readings_by_mi = defaultdict(list)
+    for mi, reading, record_date, unit in reading_rows:
+        if mi == "MAIN":
+            continue
+        readings_by_mi[mi].append((datetime.fromisoformat(record_date), reading, unit))
+    for rows in readings_by_mi.values():
+        rows.sort(key=lambda r: r[0])
+
+    with engine.connect() as conn:
+        for row_id, b_month, b_year, pe_month, pe_year, old_kl, old_aud in old_rows:
+            as_is = old_kl
+            converted = old_kl / _LEGACY_KL_PER_UNIT
+            reference = _household_sum_units(readings_by_mi, b_month, b_year, pe_month, pe_year)
+
+            if reference:
+                total_units_consumed = as_is if abs(as_is - reference) <= abs(converted - reference) else converted
+            else:
+                total_units_consumed = as_is
+
+            total_cost = old_aud
+            cost_per_unit = round(total_cost / total_units_consumed, 4) if total_units_consumed else None
+
+            conn.execute(
+                text(
+                    "UPDATE billing_statements SET total_units_consumed = :u, total_cost = :c,"
+                    " cost_per_unit = :cpu WHERE id = :id"
+                ),
+                {"u": total_units_consumed, "c": total_cost, "cpu": cost_per_unit, "id": row_id},
+            )
+        conn.commit()
+
+
+_migrate_billing_statements_schema()
 
 # Create tables if they don't exist
 Base.metadata.create_all(bind=engine)
@@ -33,6 +132,9 @@ app.include_router(ai_router, prefix="/ai")
 
 # Oracle 26ai Router
 app.include_router(oracle_router)
+
+# Daily Leak Detection Router
+app.include_router(leak_router, prefix="/leak")
 
 # CORS
 _raw_origins = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173")
@@ -334,12 +436,12 @@ EXTRACTION_PROMPT = """Return ONLY a valid JSON object with these exact keys (no
   "billing_period_start_year": <integer>,
   "billing_period_end_month": <integer 1-12>,
   "billing_period_end_year": <integer>,
-  "total_consumption_kl": <float, kilolitres>,
-  "total_cost_aud": <float, AUD total payable>
+  "total_units_consumed": <float, units of water>,
+  "total_cost": <float, total amount due in USD>
 }
 Rules:
-- total_consumption_kl: total water used in kL (1 cubic metre = 1 kL).
-- total_cost_aud: total amount payable in AUD.
+- total_units_consumed: the "total consumption in units of water" figure as printed on the statement (1 unit of water = 748 gallons). Report the number exactly as printed — do not convert it to gallons, cubic feet, or any other unit.
+- total_cost: the total amount due for this bill, in US dollars, no currency symbol.
 - Use null for any field that cannot be determined.
 - Return only the JSON object. No other text."""
 
@@ -415,7 +517,7 @@ async def import_billing(
     required = [
         "billing_period_start_month", "billing_period_start_year",
         "billing_period_end_month", "billing_period_end_year",
-        "total_consumption_kl", "total_cost_aud",
+        "total_units_consumed", "total_cost",
     ]
     missing = [f for f in required if extracted.get(f) is None]
     if missing:
@@ -433,13 +535,18 @@ async def import_billing(
         db.close()
         raise HTTPException(status_code=409, detail=f"A statement for {start_month}/{start_year} already exists (id={existing.id}).")
 
+    total_units_consumed = float(extracted["total_units_consumed"])
+    total_cost = float(extracted["total_cost"])
+    cost_per_unit = round(total_cost / total_units_consumed, 4) if total_units_consumed else None
+
     stmt = BillingStatement(
         billing_month=start_month,
         billing_year=start_year,
         period_end_month=int(extracted["billing_period_end_month"]),
         period_end_year=int(extracted["billing_period_end_year"]),
-        total_consumption_kl=float(extracted["total_consumption_kl"]),
-        billing_cost_aud=float(extracted["total_cost_aud"]),
+        total_units_consumed=total_units_consumed,
+        total_cost=total_cost,
+        cost_per_unit=cost_per_unit,
         source_filename=file.filename,
         imported_at=datetime.utcnow(),
     )
@@ -454,8 +561,9 @@ async def import_billing(
         "billing_year": stmt.billing_year,
         "period_end_month": stmt.period_end_month,
         "period_end_year": stmt.period_end_year,
-        "total_consumption_kl": stmt.total_consumption_kl,
-        "billing_cost_aud": stmt.billing_cost_aud,
+        "total_units_consumed": stmt.total_units_consumed,
+        "total_cost": stmt.total_cost,
+        "cost_per_unit": stmt.cost_per_unit,
         "source_filename": stmt.source_filename,
     }
 
@@ -476,8 +584,9 @@ async def get_billing_statements():
             "billing_year": s.billing_year,
             "period_end_month": s.period_end_month,
             "period_end_year": s.period_end_year,
-            "total_consumption_kl": s.total_consumption_kl,
-            "billing_cost_aud": s.billing_cost_aud,
+            "total_units_consumed": s.total_units_consumed,
+            "total_cost": s.total_cost,
+            "cost_per_unit": s.cost_per_unit,
             "source_filename": s.source_filename,
             "imported_at": s.imported_at.isoformat() if s.imported_at else None,
         }
@@ -499,14 +608,6 @@ async def delete_billing_statement(stmt_id: int):
     return {"ok": True}
 
 
-_GALLON_TO_KL = 0.00378541
-_CUFT_TO_KL = 0.0283168
-
-
-def _to_kl(reading: float, unit: int) -> float:
-    return reading * (_CUFT_TO_KL if unit == 1 else _GALLON_TO_KL)
-
-
 # Verify billing statements against summed household meter readings
 @app.get("/billing-verify")
 async def billing_verify():
@@ -518,9 +619,11 @@ async def billing_verify():
     all_readings = db.query(Reading).order_by(Reading.record_date).all()
     db.close()
 
-    # Group readings by household
+    # Group readings by household (exclude the main/master meter, if present, to avoid double-counting)
     by_mi: dict[str, list] = defaultdict(list)
     for r in all_readings:
+        if r.mi == "MAIN":
+            continue
         by_mi[r.mi].append(r)
 
     results = []
@@ -534,7 +637,7 @@ async def billing_verify():
         else:
             period_end = date_type(end_year, end_month + 1, 1)
 
-        household_sum_kl = 0.0
+        household_sum_units = 0.0
         has_any_data = False
 
         for readings in by_mi.values():
@@ -546,11 +649,16 @@ async def billing_verify():
             end_rdg = before_end[-1]
             if baseline.id == end_rdg.id:
                 continue
-            household_sum_kl += max(0.0, _to_kl(end_rdg.reading, end_rdg.unit) - _to_kl(baseline.reading, baseline.unit))
+            household_sum_units += max(0.0, _to_units(end_rdg.reading, end_rdg.unit) - _to_units(baseline.reading, baseline.unit))
             has_any_data = True
 
-        household_sum_kl = round(household_sum_kl, 3) if has_any_data else None
-        discrepancy_kl = round(stmt.total_consumption_kl - household_sum_kl, 3) if household_sum_kl is not None else None
+        household_sum_units = round(household_sum_units, 3) if has_any_data else None
+        discrepancy_units = round(stmt.total_units_consumed - household_sum_units, 3) if household_sum_units is not None else None
+        money_lost = (
+            round(discrepancy_units * stmt.cost_per_unit, 2)
+            if discrepancy_units is not None and stmt.cost_per_unit is not None
+            else None
+        )
 
         results.append({
             "billing_statement_id": stmt.id,
@@ -558,10 +666,12 @@ async def billing_verify():
             "billing_year": stmt.billing_year,
             "period_end_month": end_month,
             "period_end_year": end_year,
-            "total_consumption_kl": stmt.total_consumption_kl,
-            "billing_cost_aud": stmt.billing_cost_aud,
-            "household_sum_kl": household_sum_kl,
-            "discrepancy_kl": discrepancy_kl,
+            "total_units_consumed": stmt.total_units_consumed,
+            "total_cost": stmt.total_cost,
+            "cost_per_unit": stmt.cost_per_unit,
+            "household_sum_units": household_sum_units,
+            "discrepancy_units": discrepancy_units,
+            "money_lost": money_lost,
             "has_sufficient_readings": has_any_data,
         })
 

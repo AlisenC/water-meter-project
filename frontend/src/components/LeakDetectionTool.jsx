@@ -116,6 +116,7 @@ export default function LeakDetectionTool() {
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <LeakCsvImport
+              key={`submeter-import-${activeSession.id}`}
               title="Import Daily Submeter Readings"
               hint="Columns: mi, reading, record_date, unit (0 = gallons, 1 = CCF)"
               previewUrl="/leak/submeter/import/preview"
@@ -123,6 +124,7 @@ export default function LeakDetectionTool() {
               onImported={(res) => { toast.success(`${res.inserted} submeter row(s) imported.`); refresh(); }}
             />
             <LeakCsvImport
+              key={`main-meter-import-${activeSession.id}`}
               title="Import Daily Main Meter Readings"
               hint="AMI range-export CSV (Account_ID, Read_Time, Read, Flow_Time, Flow, …)"
               previewUrl="/leak/main-meter/import/preview"

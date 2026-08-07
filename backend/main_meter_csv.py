@@ -69,6 +69,7 @@ def parse_main_meter_csv_bytes(file_bytes: bytes, filename: str) -> tuple[list[d
                 continue
 
         valid_rows.append({
+            "row_num": row_num,
             "account_id": row["account_id"] or None,
             "meter_id": row["meter_id"] or None,
             "meter_sn": row["meter_sn"] or None,

@@ -18,7 +18,7 @@ const KIND_CONFIG = {
   submeter: {
     title: "Submeter Readings",
     listUrl: (sessionId) => `/leak/sessions/${sessionId}/submeter-readings`,
-    deleteUrl: (id) => `/leak/submeter/${id}`,
+    bulkDeleteUrl: "/leak/submeter",
     dateKey: "record_date",
     columns: [
       { key: "mi", label: "Meter" },
@@ -30,7 +30,7 @@ const KIND_CONFIG = {
   "main-meter": {
     title: "Main Meter Readings",
     listUrl: (sessionId) => `/leak/sessions/${sessionId}/main-meter-readings`,
-    deleteUrl: (id) => `/leak/main-meter/${id}`,
+    bulkDeleteUrl: "/leak/main-meter",
     dateKey: "read_time",
     columns: [
       { key: "read_time", label: "Time", format: (v) => timeOfDayLabel(v) },
@@ -101,7 +101,7 @@ export default function LeakRawDataTable({ sessionId, kind, onChanged }) {
     if (!window.confirm(`Delete ${selected.size} selected row(s)? This cannot be undone.`)) return;
     setDeleting(true);
     try {
-      await Promise.all([...selected].map((id) => api.delete(config.deleteUrl(id))));
+      await api.delete(config.bulkDeleteUrl, { data: { ids: [...selected] } });
       toast.success(`${selected.size} row(s) deleted.`);
       await refresh();
       onChanged?.();

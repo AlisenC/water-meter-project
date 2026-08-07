@@ -140,6 +140,7 @@ def parse_csv_bytes(
                 continue
 
         valid_rows.append({
+            "row_num": row_num,
             "mi": mi,
             "reading": reading_val,
             "record_date": parsed_date,

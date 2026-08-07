@@ -2,6 +2,7 @@ from collections import defaultdict
 from datetime import datetime, timedelta
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
+from pydantic import BaseModel
 
 from . import csv_parser
 from .database import SessionLocal
@@ -10,6 +11,25 @@ from .models import LeakMainMeterReading, LeakSession, LeakSubmeterReading
 from .units import to_units
 
 router = APIRouter()
+
+# SQLite has a hard cap on bound parameters per statement (historically 999);
+# batching keeps a single bulk delete under that regardless of how many ids
+# are selected, while still running as one request/transaction instead of one
+# HTTP request per row (which is what was overwhelming SQLite's single-writer
+# lock on large selections).
+DELETE_CHUNK_SIZE = 500
+
+
+class BulkDeleteRequest(BaseModel):
+    ids: list[int]
+
+
+def _bulk_delete(db, model, ids: list[int]) -> int:
+    deleted = 0
+    for i in range(0, len(ids), DELETE_CHUNK_SIZE):
+        chunk = ids[i:i + DELETE_CHUNK_SIZE]
+        deleted += db.query(model).filter(model.id.in_(chunk)).delete(synchronize_session=False)
+    return deleted
 
 # Purely for float noise around zero — not a business tolerance like billing's
 # DISCREPANCY_TOLERANCE_UNITS. Any real excess flags as a potential leak.
@@ -62,6 +82,30 @@ def _closest_main_row(main_rows_sorted, target: datetime):
     return best
 
 
+def _split_duplicates(rows, existing_keys, key_fn, filename):
+    """Splits `rows` into (kept, duplicates) against `existing_keys` (e.g. keys
+    already present in the session's DB rows). Repeats within `rows` itself
+    are also treated as duplicates of the first occurrence, so re-uploading
+    the same file — or a file with internal repeats — is caught too.
+    """
+    seen = set(existing_keys)
+    kept, duplicates = [], []
+    for row in rows:
+        key = key_fn(row)
+        if key in seen:
+            label = " / ".join(str(part) for part in key) if isinstance(key, tuple) else str(key)
+            duplicates.append({
+                "row_num": row.get("row_num"),
+                "reason": "duplicate_entry",
+                "raw_value": label,
+                "filename": filename,
+            })
+            continue
+        seen.add(key)
+        kept.append(row)
+    return kept, duplicates
+
+
 def _get_or_create_active_session(db) -> LeakSession:
     session = db.query(LeakSession).filter(LeakSession.status == "active").first()
     if session is None:
@@ -70,6 +114,33 @@ def _get_or_create_active_session(db) -> LeakSession:
         db.commit()
         db.refresh(session)
     return session
+
+
+def _active_session_readonly(db) -> LeakSession | None:
+    """Like _get_or_create_active_session, but never creates one — for preview
+    endpoints, which must stay side-effect-free. No active session means no
+    existing rows to dedupe against, so callers can treat that as "nothing to
+    compare".
+    """
+    return db.query(LeakSession).filter(LeakSession.status == "active").first()
+
+
+def _existing_submeter_keys(db, session_id):
+    return {
+        (mi, record_date)
+        for mi, record_date in db.query(LeakSubmeterReading.mi, LeakSubmeterReading.record_date)
+        .filter(LeakSubmeterReading.session_id == session_id)
+        .all()
+    }
+
+
+def _existing_main_meter_keys(db, session_id):
+    return {
+        read_time
+        for (read_time,) in db.query(LeakMainMeterReading.read_time)
+        .filter(LeakMainMeterReading.session_id == session_id)
+        .all()
+    }
 
 
 def _session_summary(db, session: LeakSession) -> dict:
@@ -116,6 +187,16 @@ async def submeter_import_preview(file: UploadFile = File(...)):
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
+    db = SessionLocal()
+    active = _active_session_readonly(db)
+    existing_keys = _existing_submeter_keys(db, active.id) if active else set()
+    db.close()
+
+    valid_rows, duplicate_rows = _split_duplicates(
+        valid_rows, existing_keys, lambda row: (row["mi"], row["record_date"]), file.filename
+    )
+    error_rows = error_rows + duplicate_rows
+
     dates = [r["record_date"] for r in valid_rows]
     return {
         "filename": file.filename,
@@ -140,6 +221,13 @@ async def submeter_import_confirm(file: UploadFile = File(...)):
 
     db = SessionLocal()
     session = _get_or_create_active_session(db)
+
+    existing_keys = _existing_submeter_keys(db, session.id)
+    valid_rows, duplicate_rows = _split_duplicates(
+        valid_rows, existing_keys, lambda row: (row["mi"], row["record_date"]), file.filename
+    )
+    error_rows = error_rows + duplicate_rows
+
     for row in valid_rows:
         db.add(LeakSubmeterReading(
             session_id=session.id,
@@ -160,6 +248,16 @@ async def main_meter_import_preview(file: UploadFile = File(...)):
         valid_rows, error_rows = parse_main_meter_csv_bytes(file_bytes, file.filename)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
+
+    db = SessionLocal()
+    active = _active_session_readonly(db)
+    existing_keys = _existing_main_meter_keys(db, active.id) if active else set()
+    db.close()
+
+    valid_rows, duplicate_rows = _split_duplicates(
+        valid_rows, existing_keys, lambda row: row["read_time"], file.filename
+    )
+    error_rows = error_rows + duplicate_rows
 
     dates = [r["read_time"] for r in valid_rows]
     return {
@@ -182,6 +280,13 @@ async def main_meter_import_confirm(file: UploadFile = File(...)):
 
     db = SessionLocal()
     session = _get_or_create_active_session(db)
+
+    existing_keys = _existing_main_meter_keys(db, session.id)
+    valid_rows, duplicate_rows = _split_duplicates(
+        valid_rows, existing_keys, lambda row: row["read_time"], file.filename
+    )
+    error_rows = error_rows + duplicate_rows
+
     for row in valid_rows:
         db.add(LeakMainMeterReading(
             session_id=session.id,
@@ -333,8 +438,17 @@ async def restore_session(session_id: int):
 
     current_active = db.query(LeakSession).filter(LeakSession.status == "active").first()
     if current_active:
-        current_active.status = "archived"
-        current_active.archived_at = datetime.utcnow()
+        has_data = (
+            db.query(LeakSubmeterReading).filter(LeakSubmeterReading.session_id == current_active.id).first() is not None
+            or db.query(LeakMainMeterReading).filter(LeakMainMeterReading.session_id == current_active.id).first() is not None
+        )
+        if has_data:
+            current_active.status = "archived"
+            current_active.archived_at = datetime.utcnow()
+        else:
+            # Nothing was ever imported into this workspace — drop it rather than
+            # leaving a permanent zero-row entry cluttering Archived Sessions.
+            db.delete(current_active)
 
     session.status = "active"
     session.archived_at = None
@@ -422,6 +536,17 @@ async def delete_submeter_reading(reading_id: int):
     return {"ok": True}
 
 
+@router.delete("/submeter")
+async def delete_submeter_readings(payload: BulkDeleteRequest):
+    if not payload.ids:
+        raise HTTPException(status_code=400, detail="No ids provided")
+    db = SessionLocal()
+    deleted = _bulk_delete(db, LeakSubmeterReading, payload.ids)
+    db.commit()
+    db.close()
+    return {"deleted": deleted}
+
+
 @router.delete("/main-meter/{reading_id}")
 async def delete_main_meter_reading(reading_id: int):
     db = SessionLocal()
@@ -433,3 +558,14 @@ async def delete_main_meter_reading(reading_id: int):
     db.commit()
     db.close()
     return {"ok": True}
+
+
+@router.delete("/main-meter")
+async def delete_main_meter_readings(payload: BulkDeleteRequest):
+    if not payload.ids:
+        raise HTTPException(status_code=400, detail="No ids provided")
+    db = SessionLocal()
+    deleted = _bulk_delete(db, LeakMainMeterReading, payload.ids)
+    db.commit()
+    db.close()
+    return {"deleted": deleted}

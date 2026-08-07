@@ -33,6 +33,14 @@ export default function StatementUpload({
       toast.success(
         `Imported ${monthLabel(d.billing_year, d.billing_month)} — ${unitsLabel}, ${costLabel} ${perUnit}`.trim()
       );
+      if (d.low_confidence_fields?.length) {
+        toast(
+          `Couldn't confirm ${d.low_confidence_fields.join(", ")} against the PDF text — double-check ${
+            d.low_confidence_fields.length > 1 ? "these values" : "this value"
+          } (the local model sometimes drops a repeated digit, e.g. 117 → 17).`,
+          { icon: "⚠️", duration: 8000 }
+        );
+      }
       setPdfFile(null);
       onImportSuccess();
     } catch (err) {

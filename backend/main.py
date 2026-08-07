@@ -174,6 +174,10 @@ class ReadingCreate(BaseModel):
 class BillingStatementUpdate(BaseModel):
     total_units_consumed: Optional[float] = None
     total_cost: Optional[float] = None
+    billing_month: Optional[int] = None
+    billing_year: Optional[int] = None
+    period_end_month: Optional[int] = None
+    period_end_year: Optional[int] = None
 
 # AI Agent Router
 app.include_router(ai_router, prefix="/ai")
@@ -520,6 +524,90 @@ def _parse_ai_json(raw_text: str) -> dict:
     return json.loads(cleaned)
 
 
+_NUMBER_RE = re.compile(r"\d[\d,]*\.?\d*")
+_SLASH_DATE_RE = re.compile(r"\b(\d{1,2})[/\-](\d{1,2})[/\-](\d{2,4})\b")
+
+
+def _normalize_number(value) -> str:
+    f = float(value)
+    return str(int(f)) if f == int(f) else f"{f:g}"
+
+
+def _source_number_tokens(source_text: str) -> set[str]:
+    """Every number printed in the statement text, normalized for comparison. Used to
+    catch a model transcription error (e.g. a doubled digit dropped: 117 -> 17) by
+    checking the extracted value was actually printed, rather than trusting the model
+    reproduced it correctly."""
+    tokens = set()
+    for m in _NUMBER_RE.finditer(source_text):
+        raw = m.group(0).replace(",", "").strip(".")
+        if not raw:
+            continue
+        try:
+            tokens.add(_normalize_number(raw))
+        except ValueError:
+            continue
+    return tokens
+
+
+def _normalize_year(raw: str) -> int:
+    if len(raw) == 4:
+        return int(raw)
+    y = int(raw)
+    return 2000 + y if y < 70 else 1900 + y
+
+
+def _date_in_source_text(source_text: str, month: int, year: int) -> bool | None:
+    """Checks whether any MM/DD/YYYY-style date in the text, for the given year, has
+    `month` as one of its numeric components. Scoped by year (not just "does this
+    number appear in some date somewhere") because with a start and an end date both
+    present, an unscoped check lets a dropped digit collide with the other date's day
+    or month field and slip through undetected. Returns None (verification skipped) if
+    the text has no dates for that year at all, since some statements only spell dates
+    out ("November 15, 2024"), where this check can't say anything either way."""
+    scoped = [
+        (int(m1), int(m2))
+        for m1, m2, y in _SLASH_DATE_RE.findall(source_text)
+        if _normalize_year(y) == year
+    ]
+    if not scoped:
+        return None
+    return any(month in (m1, m2) for m1, m2 in scoped)
+
+
+def _verify_extraction(source_text: str, extracted: dict) -> list[str]:
+    """Returns the names of extracted fields that could not be confirmed against the
+    statement's own text — a signal (not proof) that the AI mistyped a number or date,
+    which the local Ollama model in particular is prone to on repeated/doubled digits."""
+    if not source_text:
+        return []
+
+    warnings = []
+    number_tokens = _source_number_tokens(source_text)
+
+    for field in ("total_units_consumed", "total_cost"):
+        value = extracted.get(field)
+        if value is None:
+            continue
+        try:
+            if _normalize_number(value) not in number_tokens:
+                warnings.append(field)
+        except (TypeError, ValueError):
+            warnings.append(field)
+
+    for month_field, year_field in (
+        ("billing_period_start_month", "billing_period_start_year"),
+        ("billing_period_end_month", "billing_period_end_year"),
+    ):
+        month, year = extracted.get(month_field), extracted.get(year_field)
+        if month is None or year is None:
+            continue
+        if _date_in_source_text(source_text, int(month), int(year)) is False:
+            warnings.append(month_field)
+
+    return warnings
+
+
 def _first_page_reader(pdf_bytes: bytes) -> PdfReader:
     """Statements are sometimes followed by a payment stub, terms/conditions insert, or a
     second account's pages — only page 1 is ever the actual bill, so extraction always
@@ -656,6 +744,12 @@ async def import_billing(
     except json.JSONDecodeError:
         raise HTTPException(status_code=422, detail=f"AI returned non-JSON response: {raw_text[:300]}")
 
+    try:
+        source_text = _extract_pdf_text(pdf_bytes)
+    except HTTPException:
+        source_text = ""  # e.g. a scanned PDF handled by a cloud provider's vision input — nothing to verify against
+    low_confidence_fields = _verify_extraction(source_text, extracted)
+
     # Only the period start is truly required (it's the dedup/identity key below). Every
     # other field is best-effort: rather than failing the whole import when the model
     # misses one, leave it blank (None) and let the statement still get created —
@@ -718,6 +812,7 @@ async def import_billing(
         "cost_per_unit": stmt.cost_per_unit,
         "source_filename": stmt.source_filename,
         "has_pdf": _statement_pdf_path_if_exists(stmt) is not None,
+        "low_confidence_fields": low_confidence_fields,
     }
 
 
@@ -762,14 +857,23 @@ async def get_billing_statement_pdf(stmt_id: int):
     return FileResponse(path, media_type="application/pdf", filename=os.path.basename(path))
 
 
-# Manually correct a billing statement's units/cost — e.g. after an AI extraction that
-# missed or misread these fields.
+# Manually correct a billing statement's units/cost/dates — e.g. after an AI extraction
+# that missed, misread, or (per the local Ollama model's known weakness) dropped a
+# repeated digit in these fields.
 @app.patch("/billing-statements/{stmt_id}")
 async def update_billing_statement(stmt_id: int, data: BillingStatementUpdate):
     if data.total_units_consumed is not None and data.total_units_consumed < 0:
         raise HTTPException(status_code=422, detail="total_units_consumed cannot be negative.")
     if data.total_cost is not None and data.total_cost < 0:
         raise HTTPException(status_code=422, detail="total_cost cannot be negative.")
+    for field in ("billing_month", "period_end_month"):
+        value = getattr(data, field)
+        if value is not None and not (1 <= value <= 12):
+            raise HTTPException(status_code=422, detail=f"{field} must be between 1 and 12.")
+    for field in ("billing_year", "period_end_year"):
+        value = getattr(data, field)
+        if value is not None and value < 2000:
+            raise HTTPException(status_code=422, detail=f"{field} must be a plausible 4-digit year.")
 
     db = SessionLocal()
     stmt = db.query(BillingStatement).filter(BillingStatement.id == stmt_id).first()
@@ -777,15 +881,55 @@ async def update_billing_statement(stmt_id: int, data: BillingStatementUpdate):
         db.close()
         raise HTTPException(status_code=404, detail="Billing statement not found")
 
+    new_billing_month = data.billing_month if data.billing_month is not None else stmt.billing_month
+    new_billing_year = data.billing_year if data.billing_year is not None else stmt.billing_year
+    if (new_billing_month, new_billing_year) != (stmt.billing_month, stmt.billing_year):
+        clash = db.query(BillingStatement).filter(
+            BillingStatement.id != stmt_id,
+            BillingStatement.billing_month == new_billing_month,
+            BillingStatement.billing_year == new_billing_year,
+        ).first()
+        if clash:
+            db.close()
+            raise HTTPException(
+                status_code=409,
+                detail=f"A statement for {new_billing_month}/{new_billing_year} already exists (id={clash.id}).",
+            )
+
+    old_pdf_path = _statement_pdf_path_if_exists(stmt)
+    new_period_end_month = data.period_end_month if data.period_end_month is not None else stmt.period_end_month
+    new_period_end_year = data.period_end_year if data.period_end_year is not None else stmt.period_end_year
+    new_pdf_path = (
+        _statement_pdf_path(new_period_end_year, new_period_end_month)
+        if new_period_end_year is not None and new_period_end_month is not None
+        else None
+    )
+    if old_pdf_path and new_pdf_path and new_pdf_path != old_pdf_path and os.path.exists(new_pdf_path):
+        db.close()
+        raise HTTPException(
+            status_code=409,
+            detail=f"Another statement's PDF is already stored for {new_period_end_month}/{new_period_end_year}.",
+        )
+
     if data.total_units_consumed is not None:
         stmt.total_units_consumed = data.total_units_consumed
     if data.total_cost is not None:
         stmt.total_cost = data.total_cost
+    stmt.billing_month = new_billing_month
+    stmt.billing_year = new_billing_year
+    stmt.period_end_month = new_period_end_month
+    stmt.period_end_year = new_period_end_year
     stmt.cost_per_unit = (
         round(stmt.total_cost / stmt.total_units_consumed, 4)
         if stmt.total_units_consumed and stmt.total_cost is not None
         else None
     )
+
+    # The stored PDF is filed by period-end year/month (see _statement_pdf_path_if_exists) —
+    # move it to match so it isn't orphaned under the old filename.
+    if old_pdf_path and new_pdf_path and new_pdf_path != old_pdf_path:
+        os.makedirs(STATEMENTS_DIR, exist_ok=True)
+        os.replace(old_pdf_path, new_pdf_path)
 
     db.commit()
     db.refresh(stmt)

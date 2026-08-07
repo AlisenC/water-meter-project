@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { toast } from "react-hot-toast";
 import { api } from "../api";
 import { Download } from "lucide-react";
@@ -12,12 +13,86 @@ function periodLabel(s) {
     : `${monthLabel(s.billing_year, s.billing_month)} – ${monthLabel(s.period_end_year, s.period_end_month)}`;
 }
 
+function DateEdit({ id, month, year, monthField, yearField, onCommit, autoFocus }) {
+  return (
+    <span className="inline-flex items-center gap-0.5 font-mono text-xs">
+      <input
+        type="number"
+        min="1"
+        max="12"
+        autoFocus={autoFocus}
+        key={`${id}-${monthField}-${month}`}
+        defaultValue={month ?? ""}
+        onBlur={(e) => onCommit(monthField, e.target.value, month)}
+        title="Month"
+        className="w-9 bg-transparent border border-transparent hover:border-gray-300 focus:border-blue-400 focus:bg-white rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
+      />
+      /
+      <input
+        type="number"
+        min="2000"
+        key={`${id}-${yearField}-${year}`}
+        defaultValue={year ?? ""}
+        onBlur={(e) => onCommit(yearField, e.target.value, year)}
+        title="Year"
+        className="w-14 bg-transparent border border-transparent hover:border-gray-300 focus:border-blue-400 focus:bg-white rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
+      />
+    </span>
+  );
+}
+
+// Reads as plain text (like the read-only label it replaces) until clicked, then swaps
+// in editable month/year fields; loses focus on the group -> reverts to the text label.
+function PeriodCell({ s, editing, onStartEdit, onStopEdit, onDateFieldBlur }) {
+  if (!editing) {
+    return (
+      <button
+        type="button"
+        onClick={onStartEdit}
+        title="Click to edit"
+        className="text-left font-medium text-gray-900 hover:bg-gray-100 rounded px-1 py-0.5 -mx-1 transition-colors"
+      >
+        {periodLabel(s)}
+      </button>
+    );
+  }
+  return (
+    <div
+      className="flex items-center gap-1"
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget)) onStopEdit();
+      }}
+    >
+      <DateEdit
+        id={s.id}
+        month={s.billing_month}
+        year={s.billing_year}
+        monthField="billing_month"
+        yearField="billing_year"
+        onCommit={onDateFieldBlur}
+        autoFocus
+      />
+      <span className="text-gray-300">–</span>
+      <DateEdit
+        id={s.id}
+        month={s.period_end_month}
+        year={s.period_end_year}
+        monthField="period_end_month"
+        yearField="period_end_year"
+        onCommit={onDateFieldBlur}
+      />
+    </div>
+  );
+}
+
 function storedFilename(s) {
   // Stored under the period's END month/year — see backend/main.py's _statement_pdf_path_if_exists.
   return `${s.period_end_year}_${String(s.period_end_month).padStart(2, "0")}.pdf`;
 }
 
 export default function StatementsList({ billingStatements, verificationData, onDelete, onUpdate }) {
+  const [editingPeriodId, setEditingPeriodId] = useState(null);
+
   // Chronological order, oldest → newest.
   const sorted = [...billingStatements].sort((a, b) =>
     a.billing_year !== b.billing_year ? a.billing_year - b.billing_year : a.billing_month - b.billing_month
@@ -37,6 +112,20 @@ export default function StatementsList({ billingStatements, verificationData, on
   async function handleFieldBlur(id, field, rawValue, currentValue) {
     const num = parseFloat(rawValue);
     if (Number.isNaN(num) || num < 0 || num === currentValue) return;
+    try {
+      await api.patch(`/billing-statements/${id}`, { [field]: num });
+      toast.success("Statement updated.");
+      onUpdate();
+    } catch (err) {
+      toast.error("Update failed: " + (err.response?.data?.detail ?? err.message));
+    }
+  }
+
+  async function handleDateFieldBlur(id, field, rawValue, currentValue) {
+    const num = parseInt(rawValue, 10);
+    const isMonth = field.endsWith("_month");
+    if (Number.isNaN(num) || num === currentValue) return;
+    if (isMonth ? num < 1 || num > 12 : num < 2000) return;
     try {
       await api.patch(`/billing-statements/${id}`, { [field]: num });
       toast.success("Statement updated.");
@@ -108,7 +197,15 @@ export default function StatementsList({ billingStatements, verificationData, on
 
                 return (
                   <tr key={s.id} className="hover:bg-blue-50 transition-colors">
-                    <td className="px-3 py-3 font-medium text-gray-900">{periodLabel(s)}</td>
+                    <td className="px-3 py-3">
+                      <PeriodCell
+                        s={s}
+                        editing={editingPeriodId === s.id}
+                        onStartEdit={() => setEditingPeriodId(s.id)}
+                        onStopEdit={() => setEditingPeriodId(null)}
+                        onDateFieldBlur={(field, raw, cur) => handleDateFieldBlur(s.id, field, raw, cur)}
+                      />
+                    </td>
                     <td className="px-3 py-3">
                       <input
                         type="number"

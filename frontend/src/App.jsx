@@ -193,6 +193,7 @@ function App() {
               apiProvider={apiProvider}
               onImportSuccess={refreshBillingData}
               onDelete={handleBillingDelete}
+              onUpdate={refreshBillingData}
             />
           )}
 

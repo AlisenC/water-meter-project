@@ -74,7 +74,7 @@ export default function DashboardSummary({
           icon={TrendingUp}
           iconColor="bg-blue-100 text-blue-600"
           label="Latest Consumption"
-          value={latestBilling ? `${latestBilling.total_units_consumed.toFixed(2)} units` : "—"}
+          value={latestBilling?.total_units_consumed != null ? `${latestBilling.total_units_consumed.toFixed(2)} units` : "—"}
           sub={billingPeriodLabel ?? "No statement imported"}
           accent="blue"
         />
@@ -82,7 +82,7 @@ export default function DashboardSummary({
           icon={DollarSign}
           iconColor="bg-indigo-100 text-indigo-600"
           label="Billing Cost"
-          value={latestBilling ? `$${latestBilling.total_cost.toFixed(2)}` : "—"}
+          value={latestBilling?.total_cost != null ? `$${latestBilling.total_cost.toFixed(2)}` : "—"}
           sub={latestBilling ? "USD" : "No statement imported"}
           accent="indigo"
         />

@@ -5,6 +5,7 @@ import { Download } from "lucide-react";
 import { monthLabel, exportCSV, DISCREPANCY_TOLERANCE_UNITS } from "../utils/billing";
 
 function periodLabel(s) {
+  if (s.billing_month == null || s.billing_year == null) return "Needs review";
   const sameMonth =
     !s.period_end_month ||
     (s.period_end_month === s.billing_month && s.period_end_year === s.billing_year);
@@ -46,14 +47,24 @@ function DateEdit({ id, month, year, monthField, yearField, onCommit, autoFocus 
 function PeriodCell({ s, editing, onStartEdit, onStopEdit, onDateFieldBlur }) {
   if (!editing) {
     return (
-      <button
-        type="button"
-        onClick={onStartEdit}
-        title="Click to edit"
-        className="text-left font-medium text-gray-900 hover:bg-gray-100 rounded px-1 py-0.5 -mx-1 transition-colors"
-      >
-        {periodLabel(s)}
-      </button>
+      <span className="inline-flex items-center gap-1.5">
+        <button
+          type="button"
+          onClick={onStartEdit}
+          title="Click to edit"
+          className="text-left font-medium text-gray-900 hover:bg-gray-100 rounded px-1 py-0.5 -mx-1 transition-colors"
+        >
+          {periodLabel(s)}
+        </button>
+        {s.needs_review && (
+          <span
+            title="Automatic extraction failed for this PDF — the fields on this row are blank and need to be filled in manually."
+            className="text-[10px] font-semibold uppercase tracking-wide text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded"
+          >
+            Needs Review
+          </span>
+        )}
+      </span>
     );
   }
   return (
@@ -87,16 +98,22 @@ function PeriodCell({ s, editing, onStartEdit, onStopEdit, onDateFieldBlur }) {
 
 function storedFilename(s) {
   // Stored under the period's END month/year — see backend/main.py's _statement_pdf_path_if_exists.
+  // A needs-review stub with no known period yet is filed by id instead (_stub_pdf_path).
+  if (s.period_end_year == null || s.period_end_month == null) return `stub_${s.id}.pdf`;
   return `${s.period_end_year}_${String(s.period_end_month).padStart(2, "0")}.pdf`;
 }
 
 export default function StatementsList({ billingStatements, verificationData, onDelete, onUpdate }) {
   const [editingPeriodId, setEditingPeriodId] = useState(null);
 
-  // Chronological order, oldest → newest.
-  const sorted = [...billingStatements].sort((a, b) =>
-    a.billing_year !== b.billing_year ? a.billing_year - b.billing_year : a.billing_month - b.billing_month
-  );
+  // Chronological order, oldest → newest. Needs-review stubs have no known period yet,
+  // so they sort last rather than producing NaN comparisons.
+  const sorted = [...billingStatements].sort((a, b) => {
+    const aYear = a.billing_year ?? Infinity;
+    const bYear = b.billing_year ?? Infinity;
+    if (aYear !== bYear) return aYear - bYear;
+    return (a.billing_month ?? Infinity) - (b.billing_month ?? Infinity);
+  });
 
   async function handleDelete(id) {
     if (!window.confirm("Delete this billing statement?")) return;
@@ -196,7 +213,10 @@ export default function StatementsList({ billingStatements, verificationData, on
                     : "text-blue-700";
 
                 return (
-                  <tr key={s.id} className="hover:bg-blue-50 transition-colors">
+                  <tr
+                    key={s.id}
+                    className={`hover:bg-blue-50 transition-colors ${s.needs_review ? "bg-amber-50/60" : ""}`}
+                  >
                     <td className="px-3 py-3">
                       <PeriodCell
                         s={s}

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, Float, String, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, Float, String, DateTime, ForeignKey, Boolean
 from datetime import datetime
 from .database import Base
 
@@ -16,8 +16,8 @@ class BillingStatement(Base):
     __tablename__ = "billing_statements"
 
     id = Column(Integer, primary_key=True, index=True)
-    billing_month = Column(Integer, nullable=False)
-    billing_year = Column(Integer, nullable=False)
+    billing_month = Column(Integer, nullable=True)
+    billing_year = Column(Integer, nullable=True)
     period_end_month = Column(Integer, nullable=True)
     period_end_year = Column(Integer, nullable=True)
     total_units_consumed = Column(Float, nullable=True)
@@ -25,6 +25,10 @@ class BillingStatement(Base):
     cost_per_unit = Column(Float, nullable=True)
     source_filename = Column(String, nullable=True)
     imported_at = Column(DateTime, nullable=False)
+    # Set when a PDF import fails automatic extraction: the PDF is preserved and this
+    # stub row is left for the user to complete through the normal editing UI, instead
+    # of the upload being discarded outright.
+    needs_review = Column(Boolean, nullable=False, default=False)
 
 
 class LeakSession(Base):

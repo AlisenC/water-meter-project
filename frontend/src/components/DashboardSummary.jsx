@@ -36,7 +36,10 @@ export default function DashboardSummary({
   billingStatements = [],
   verificationData = [],
 }) {
-  const latestBilling = billingStatements.length > 0 ? billingStatements[0] : null;
+  // Skip needs-review stubs (no known billing period yet) rather than relying on
+  // the backend's NULLS-last ordering to keep them out of the "latest" slot.
+  const latestBilling =
+    billingStatements.find((s) => s.billing_month != null && s.billing_year != null) ?? null;
   const latestVerification = latestBilling
     ? verificationData.find((v) => v.billing_statement_id === latestBilling.id)
     : null;

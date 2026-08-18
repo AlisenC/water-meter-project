@@ -320,6 +320,10 @@ def oracle_sync(x_oracle_profile_id: int | None = Header(default=None)):
                 text(
                     "SELECT id, billing_month, billing_year, period_end_month, period_end_year,"
                     " total_units_consumed, total_cost, cost_per_unit, source_filename FROM billing_statements"
+                    # Needs-review stubs (see main.py's _create_stub_statement) have no
+                    # billing period yet, and wm_billing_statements.billing_month/year
+                    # are NOT NULL — skip them until the user completes the statement.
+                    " WHERE billing_month IS NOT NULL AND billing_year IS NOT NULL"
                 )
             )
         ]

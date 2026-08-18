@@ -3,6 +3,7 @@
 export const DISCREPANCY_TOLERANCE_UNITS = 1.0;
 
 export function monthLabel(year, month) {
+  if (year == null || month == null) return "—";
   return new Date(year, month - 1, 1).toLocaleDateString("en-AU", {
     month: "short",
     year: "numeric",

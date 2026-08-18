@@ -27,19 +27,28 @@ export default function StatementUpload({
     try {
       const res = await api.post("/import-billing", formData, { headers });
       const d = res.data;
-      const unitsLabel = d.total_units_consumed != null ? `${d.total_units_consumed.toFixed(2)} units` : "units unknown";
-      const costLabel = d.total_cost != null ? `$${d.total_cost.toFixed(2)}` : "cost unknown";
-      const perUnit = d.cost_per_unit != null ? `$${d.cost_per_unit.toFixed(2)}/unit` : "";
-      toast.success(
-        `Imported ${monthLabel(d.billing_year, d.billing_month)} — ${unitsLabel}, ${costLabel} ${perUnit}`.trim()
-      );
-      if (d.low_confidence_fields?.length) {
+      if (d.needs_review) {
         toast(
-          `Couldn't confirm ${d.low_confidence_fields.join(", ")} against the PDF text — double-check ${
-            d.low_confidence_fields.length > 1 ? "these values" : "this value"
-          } (the local model sometimes drops a repeated digit, e.g. 117 → 17).`,
-          { icon: "⚠️", duration: 8000 }
+          `Couldn't automatically read "${d.source_filename}": ${
+            d.review_reason ?? "extraction failed"
+          }. The PDF has been saved — fill in the period, units, and cost manually in the table below.`,
+          { icon: "⚠️", duration: 10000 }
         );
+      } else {
+        const unitsLabel = d.total_units_consumed != null ? `${d.total_units_consumed.toFixed(2)} units` : "units unknown";
+        const costLabel = d.total_cost != null ? `$${d.total_cost.toFixed(2)}` : "cost unknown";
+        const perUnit = d.cost_per_unit != null ? `$${d.cost_per_unit.toFixed(2)}/unit` : "";
+        toast.success(
+          `Imported ${monthLabel(d.billing_year, d.billing_month)} — ${unitsLabel}, ${costLabel} ${perUnit}`.trim()
+        );
+        if (d.low_confidence_fields?.length) {
+          toast(
+            `Couldn't confirm ${d.low_confidence_fields.join(", ")} against the PDF text — double-check ${
+              d.low_confidence_fields.length > 1 ? "these values" : "this value"
+            } (the local model sometimes drops a repeated digit, e.g. 117 → 17).`,
+            { icon: "⚠️", duration: 8000 }
+          );
+        }
       }
       setPdfFile(null);
       onImportSuccess();

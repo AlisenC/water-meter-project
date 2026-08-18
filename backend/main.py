@@ -157,8 +157,55 @@ def _migrate_billing_statements_nullable_units_cost():
         conn.commit()
 
 
+def _migrate_billing_statements_needs_review_column():
+    """
+    Additive migration: adds needs_review (True for a stub statement created when a PDF
+    import failed automatic extraction — see _create_stub_statement). A no-op if the
+    table doesn't exist yet or the column is already present.
+    """
+    with engine.connect() as conn:
+        cols = {row[1] for row in conn.execute(text("PRAGMA table_info(billing_statements)"))}
+        if not cols or "needs_review" in cols:
+            return  # no table yet (create_all will make one), or already migrated
+        conn.execute(text("ALTER TABLE billing_statements ADD COLUMN needs_review BOOLEAN NOT NULL DEFAULT 0"))
+        conn.commit()
+
+
+def _migrate_billing_statements_nullable_period():
+    """
+    billing_month/billing_year used to be NOT NULL. A failed-import stub (see
+    _create_stub_statement) has no known billing period until the user fills it in
+    manually, so they're now nullable. SQLite has no ALTER COLUMN, so an existing NOT
+    NULL table is migrated by recreating it (preserving every existing column and row);
+    a no-op if the table doesn't exist yet or is already nullable.
+    """
+    with engine.connect() as conn:
+        cols = conn.execute(text("PRAGMA table_info(billing_statements)")).fetchall()
+        if not cols:
+            return  # no table yet — create_all below will make one with the right nullability
+
+        by_name = {c[1]: c for c in cols}
+        if "billing_month" not in by_name or by_name["billing_month"][3] == 0:
+            return  # already nullable
+
+        col_defs = []
+        for _cid, name, ctype, notnull, _dflt, pk in cols:
+            relax = name in ("billing_month", "billing_year")
+            suffix = " PRIMARY KEY" if pk else (" NOT NULL" if notnull and not relax else "")
+            col_defs.append(f'"{name}" {ctype}{suffix}')
+        col_names = ", ".join(f'"{c[1]}"' for c in cols)
+
+        conn.execute(text(f"CREATE TABLE billing_statements_new ({', '.join(col_defs)})"))
+        conn.execute(text(f"INSERT INTO billing_statements_new SELECT {col_names} FROM billing_statements"))
+        conn.execute(text("DROP TABLE billing_statements"))
+        conn.execute(text("ALTER TABLE billing_statements_new RENAME TO billing_statements"))
+        conn.commit()
+
+
 _migrate_billing_statements_schema()
 _migrate_billing_statements_nullable_units_cost()
+_migrate_billing_statements_needs_review_column()
+_migrate_billing_statements_nullable_period()
 
 # Create tables if they don't exist
 Base.metadata.create_all(bind=engine)
@@ -491,14 +538,25 @@ def _statement_pdf_path(year: int, month: int) -> str:
     return os.path.join(STATEMENTS_DIR, f"{year:04d}_{month:02d}.pdf")
 
 
+def _stub_pdf_path(stmt_id: int) -> str:
+    """A failed-import stub (see _create_stub_statement) doesn't have a known billing
+    period yet, so its PDF can't use the period-keyed filename above — it's filed by
+    statement id instead, until the user fills in the period and it gets renamed
+    (see update_billing_statement's PDF-move logic)."""
+    return os.path.join(STATEMENTS_DIR, f"stub_{stmt_id}.pdf")
+
+
 def _statement_pdf_path_if_exists(stmt) -> str | None:
     """Stored PDFs are named after the billing period's END month/year (e.g. a bill
     covering Nov 2024 - Jan 2025 is filed as 2025_01), matching how utilities usually
-    date the statement itself, not the period it opens with."""
-    if stmt.period_end_year is None or stmt.period_end_month is None:
-        return None
-    path = _statement_pdf_path(stmt.period_end_year, stmt.period_end_month)
-    return path if os.path.exists(path) else None
+    date the statement itself, not the period it opens with. Falls back to the stub
+    (id-keyed) path for a statement whose period isn't known yet."""
+    if stmt.period_end_year is not None and stmt.period_end_month is not None:
+        path = _statement_pdf_path(stmt.period_end_year, stmt.period_end_month)
+        if os.path.exists(path):
+            return path
+    stub_path = _stub_pdf_path(stmt.id)
+    return stub_path if os.path.exists(stub_path) else None
 
 
 EXTRACTION_PROMPT = """Return ONLY a valid JSON object with these exact keys (no markdown, no explanation):
@@ -712,28 +770,20 @@ def _extract_with_openai(pdf_b64: str, filename: str, api_key: str) -> str:
     return response.choices[0].message.content
 
 
-# Import a billing statement PDF
-@app.post("/import-billing")
-async def import_billing(
-    file: UploadFile = File(...),
-    x_api_key: str | None = Header(default=None),
-    x_api_provider: str | None = Header(default=None),
-):
-    if not file.filename.lower().endswith(".pdf"):
-        raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
-
-    pdf_bytes = await file.read()
-
+def _extract_billing_data(pdf_bytes: bytes, filename: str, x_api_key: str | None, x_api_provider: str | None) -> dict:
+    """Runs AI extraction and parses/validates the result. Raises HTTPException on any
+    failure (unreadable PDF, provider error, non-JSON response, missing required
+    field) — the caller is responsible for deciding what happens on failure."""
     try:
         if not x_api_key:
-            raw_text = _extract_with_ollama(pdf_bytes, file.filename)
+            raw_text = _extract_with_ollama(pdf_bytes, filename)
         else:
             pdf_b64 = base64.standard_b64encode(_first_page_pdf_bytes(pdf_bytes)).decode("utf-8")
             provider = (x_api_provider or "anthropic").lower()
             if provider == "openai":
-                raw_text = _extract_with_openai(pdf_b64, file.filename, x_api_key)
+                raw_text = _extract_with_openai(pdf_b64, filename, x_api_key)
             else:
-                raw_text = _extract_with_anthropic(pdf_b64, file.filename, x_api_key)
+                raw_text = _extract_with_anthropic(pdf_b64, filename, x_api_key)
     except HTTPException:
         raise
     except Exception as e:
@@ -768,6 +818,85 @@ async def import_billing(
     total_units_consumed = float(extracted["total_units_consumed"]) if extracted.get("total_units_consumed") is not None else None
     total_cost = float(extracted["total_cost"]) if extracted.get("total_cost") is not None else None
 
+    return {
+        "start_month": start_month,
+        "start_year": start_year,
+        "end_month": end_month,
+        "end_year": end_year,
+        "total_units_consumed": total_units_consumed,
+        "total_cost": total_cost,
+        "low_confidence_fields": low_confidence_fields,
+    }
+
+
+def _create_stub_statement(pdf_bytes: bytes, filename: str, reason: str) -> dict:
+    """Fallback for a PDF that failed automatic extraction (unreadable/encrypted PDF,
+    no text layer, AI provider error, non-JSON response, or no billing period found):
+    rather than discarding the upload, preserve the PDF and create a stub statement
+    with needs_review=True, so the user can complete it through the normal editing UI
+    (StatementsList) instead of losing the file or having to retry/recreate it."""
+    db = SessionLocal()
+    stmt = BillingStatement(
+        billing_month=None,
+        billing_year=None,
+        period_end_month=None,
+        period_end_year=None,
+        total_units_consumed=None,
+        total_cost=None,
+        cost_per_unit=None,
+        source_filename=filename,
+        imported_at=datetime.utcnow(),
+        needs_review=True,
+    )
+    db.add(stmt)
+    db.commit()
+    db.refresh(stmt)
+    stmt_id = stmt.id
+    db.close()
+
+    os.makedirs(STATEMENTS_DIR, exist_ok=True)
+    with open(_stub_pdf_path(stmt_id), "wb") as f:
+        f.write(pdf_bytes)
+
+    return {
+        "id": stmt_id,
+        "billing_month": None,
+        "billing_year": None,
+        "period_end_month": None,
+        "period_end_year": None,
+        "total_units_consumed": None,
+        "total_cost": None,
+        "cost_per_unit": None,
+        "source_filename": filename,
+        "has_pdf": True,
+        "needs_review": True,
+        "review_reason": reason,
+        "low_confidence_fields": [],
+    }
+
+
+# Import a billing statement PDF
+@app.post("/import-billing")
+async def import_billing(
+    file: UploadFile = File(...),
+    x_api_key: str | None = Header(default=None),
+    x_api_provider: str | None = Header(default=None),
+):
+    if not file.filename.lower().endswith(".pdf"):
+        raise HTTPException(status_code=400, detail="Only PDF files are accepted.")
+
+    pdf_bytes = await file.read()
+
+    try:
+        extraction = _extract_billing_data(pdf_bytes, file.filename, x_api_key, x_api_provider)
+    except HTTPException as e:
+        return _create_stub_statement(pdf_bytes, file.filename, str(e.detail))
+
+    start_month, start_year = extraction["start_month"], extraction["start_year"]
+    end_month, end_year = extraction["end_month"], extraction["end_year"]
+    total_units_consumed, total_cost = extraction["total_units_consumed"], extraction["total_cost"]
+    low_confidence_fields = extraction["low_confidence_fields"]
+
     db = SessionLocal()
     existing = db.query(BillingStatement).filter(
         BillingStatement.billing_month == start_month,
@@ -795,6 +924,7 @@ async def import_billing(
         cost_per_unit=cost_per_unit,
         source_filename=file.filename,
         imported_at=datetime.utcnow(),
+        needs_review=False,
     )
     db.add(stmt)
     db.commit()
@@ -812,6 +942,7 @@ async def import_billing(
         "cost_per_unit": stmt.cost_per_unit,
         "source_filename": stmt.source_filename,
         "has_pdf": _statement_pdf_path_if_exists(stmt) is not None,
+        "needs_review": stmt.needs_review,
         "low_confidence_fields": low_confidence_fields,
     }
 
@@ -838,6 +969,7 @@ async def get_billing_statements():
             "source_filename": s.source_filename,
             "imported_at": s.imported_at.isoformat() if s.imported_at else None,
             "has_pdf": _statement_pdf_path_if_exists(s) is not None,
+            "needs_review": s.needs_review,
         }
         for s in stmts
     ]
@@ -925,6 +1057,12 @@ async def update_billing_statement(stmt_id: int, data: BillingStatementUpdate):
         else None
     )
 
+    # A stub created by the failed-import fallback (see _create_stub_statement) is
+    # "complete" once it has the same minimum field a successful import requires —
+    # billing_month/billing_year — at which point it behaves like any other statement.
+    if stmt.needs_review and stmt.billing_month is not None and stmt.billing_year is not None:
+        stmt.needs_review = False
+
     # The stored PDF is filed by period-end year/month (see _statement_pdf_path_if_exists) —
     # move it to match so it isn't orphaned under the old filename.
     if old_pdf_path and new_pdf_path and new_pdf_path != old_pdf_path:
@@ -946,6 +1084,7 @@ async def update_billing_statement(stmt_id: int, data: BillingStatementUpdate):
         "cost_per_unit": stmt.cost_per_unit,
         "source_filename": stmt.source_filename,
         "has_pdf": _statement_pdf_path_if_exists(stmt) is not None,
+        "needs_review": stmt.needs_review,
     }
 
 
@@ -970,7 +1109,13 @@ async def delete_billing_statement(stmt_id: int):
 @app.get("/billing-verify")
 async def billing_verify():
     db = SessionLocal()
-    stmts = db.query(BillingStatement).order_by(
+    # Excludes needs-review stubs (see _create_stub_statement) — without a known billing
+    # period there's nothing to verify against the household meter sums, and the date
+    # arithmetic below requires non-null billing_month/billing_year.
+    stmts = db.query(BillingStatement).filter(
+        BillingStatement.billing_month.isnot(None),
+        BillingStatement.billing_year.isnot(None),
+    ).order_by(
         BillingStatement.billing_year,
         BillingStatement.billing_month,
     ).all()

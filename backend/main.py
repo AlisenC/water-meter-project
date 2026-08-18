@@ -1,11 +1,10 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header
 from fastapi.responses import FileResponse
-import csv
 import os
 import base64
 import json
 import re
-from io import StringIO, BytesIO
+from io import BytesIO
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import text
 from .database import SessionLocal, engine
@@ -27,20 +26,30 @@ from pypdf import PdfReader, PdfWriter
 GAP_MULTIPLIER = 1.5
 
 DISCREPANCY_TOLERANCE_UNITS = 1.0  # ~748 gallons; a statement/household-sum pair within this is considered "matching"
-# What 748 gallons would have converted to under the old (mislabeled) "kilolitres" constant —
-# used only by the one-time migration below to guess whether legacy data needs converting.
-_LEGACY_KL_PER_UNIT = 0.748 * 0.00378541
 
 
 def _household_sum_units(readings_by_mi: dict, billing_month: int, billing_year: int,
                           period_end_month: int | None, period_end_year: int | None) -> float | None:
-    """Sum of household meter deltas for a billing period, in units of water. None if insufficient data."""
+    """Sum of household meter deltas for a billing period, in units of water.
+
+    Exclusive upper bounds: a reading taken during the boundary month itself still counts
+    as a valid baseline/endpoint, since bills only give month-level granularity but real
+    meter reads land mid-month — a strict "before day 1" cutoff would skip the correct
+    reading and fall back a full extra cycle, inflating the result.
+
+    Args:
+        readings_by_mi: Meter ID -> list of (datetime, reading, unit) tuples, sorted ascending by datetime.
+        billing_month: Start month of the billing period (1-12).
+        billing_year: Start year of the billing period.
+        period_end_month: End month of the period if different from the start; None to use billing_month.
+        period_end_year: End year of the period if different from the start; None to use billing_year.
+
+    Returns:
+        Total units of water consumed across all households in the period, rounded to 3
+        decimals, or None if no household had a reading before both the period start and end.
+    """
     end_month = period_end_month or billing_month
     end_year = period_end_year or billing_year
-    # Exclusive upper bound: any reading taken during the start month itself still counts as
-    # a valid baseline. Bills only give month-level granularity, but real meter reads land
-    # mid-month, so a strict "before day 1" cutoff would skip the correct baseline reading
-    # entirely and fall back a full extra reading cycle — badly inflating the household sum.
     period_start_end_excl = date_type(billing_year + 1, 1, 1) if billing_month == 12 else date_type(billing_year, billing_month + 1, 1)
     period_end = date_type(end_year + 1, 1, 1) if end_month == 12 else date_type(end_year, end_month + 1, 1)
 
@@ -58,103 +67,6 @@ def _household_sum_units(readings_by_mi: dict, billing_month: int, billing_year:
         total += max(0.0, _to_units(end_rdg[1], end_rdg[2]) - _to_units(baseline[1], baseline[2]))
         has_data = True
     return round(total, 3) if has_data else None
-
-
-def _migrate_billing_statements_schema():
-    """
-    One-time migration for deployments that already have billing_statements rows under
-    the old (mislabeled) schema — total_consumption_kl / billing_cost_aud. Adds the new
-    columns and backfills them without dropping the old ones, so a deployed volume's data
-    survives this schema change rather than needing to be wiped.
-
-    The old extraction prompt asked the AI for "kilolitres," but real US water bills don't
-    print kL — they print "units of water." So an old row's stored number is most likely
-    already a units-of-water figure under a wrong label, not a true kL conversion. Since we
-    can't know for certain which it was, we cross-check each row against the actual summed
-    household meter deltas for that billing period (when available) and pick whichever
-    interpretation — as-is, or divided by the old kL-per-unit constant — lands closer to
-    that independent reference. Falls back to "as-is" when there's no reading data to check
-    against.
-    """
-    with engine.connect() as conn:
-        cols = {row[1] for row in conn.execute(text("PRAGMA table_info(billing_statements)"))}
-        if not cols or "total_units_consumed" in cols or "total_consumption_kl" not in cols:
-            return  # no table yet (create_all will make one), or already migrated
-
-        conn.execute(text("ALTER TABLE billing_statements ADD COLUMN total_units_consumed FLOAT"))
-        conn.execute(text("ALTER TABLE billing_statements ADD COLUMN total_cost FLOAT"))
-        conn.execute(text("ALTER TABLE billing_statements ADD COLUMN cost_per_unit FLOAT"))
-        conn.commit()
-
-        old_rows = conn.execute(text(
-            "SELECT id, billing_month, billing_year, period_end_month, period_end_year,"
-            " total_consumption_kl, billing_cost_aud FROM billing_statements"
-        )).fetchall()
-        reading_rows = conn.execute(text("SELECT mi, reading, record_date, unit FROM readings")).fetchall()
-
-    readings_by_mi = defaultdict(list)
-    for mi, reading, record_date, unit in reading_rows:
-        if mi == "MAIN":
-            continue
-        readings_by_mi[mi].append((datetime.fromisoformat(record_date), reading, unit))
-    for rows in readings_by_mi.values():
-        rows.sort(key=lambda r: r[0])
-
-    with engine.connect() as conn:
-        for row_id, b_month, b_year, pe_month, pe_year, old_kl, old_aud in old_rows:
-            as_is = old_kl
-            converted = old_kl / _LEGACY_KL_PER_UNIT
-            reference = _household_sum_units(readings_by_mi, b_month, b_year, pe_month, pe_year)
-
-            if reference:
-                total_units_consumed = as_is if abs(as_is - reference) <= abs(converted - reference) else converted
-            else:
-                total_units_consumed = as_is
-
-            total_cost = old_aud
-            cost_per_unit = round(total_cost / total_units_consumed, 4) if total_units_consumed else None
-
-            conn.execute(
-                text(
-                    "UPDATE billing_statements SET total_units_consumed = :u, total_cost = :c,"
-                    " cost_per_unit = :cpu WHERE id = :id"
-                ),
-                {"u": total_units_consumed, "c": total_cost, "cpu": cost_per_unit, "id": row_id},
-            )
-        conn.commit()
-
-
-def _migrate_billing_statements_nullable_units_cost():
-    """
-    total_units_consumed/total_cost used to be NOT NULL, with 0.0 synthesized as a
-    placeholder whenever AI extraction couldn't determine them — making a genuinely
-    free/zero bill indistinguishable from a failed extraction. They're now nullable, so a
-    missing value is stored as NULL and left for manual review/editing instead of a fake
-    0.0. SQLite has no ALTER COLUMN, so an existing NOT NULL table is migrated by
-    recreating it (preserving every existing column and row); a no-op if the table
-    doesn't exist yet or is already nullable.
-    """
-    with engine.connect() as conn:
-        cols = conn.execute(text("PRAGMA table_info(billing_statements)")).fetchall()
-        if not cols:
-            return  # no table yet — create_all below will make one with the right nullability
-
-        by_name = {c[1]: c for c in cols}  # name -> (cid, name, type, notnull, dflt_value, pk)
-        if "total_units_consumed" not in by_name or by_name["total_units_consumed"][3] == 0:
-            return  # already nullable
-
-        col_defs = []
-        for _cid, name, ctype, notnull, _dflt, pk in cols:
-            relax = name in ("total_units_consumed", "total_cost")
-            suffix = " PRIMARY KEY" if pk else (" NOT NULL" if notnull and not relax else "")
-            col_defs.append(f'"{name}" {ctype}{suffix}')
-        col_names = ", ".join(f'"{c[1]}"' for c in cols)
-
-        conn.execute(text(f"CREATE TABLE billing_statements_new ({', '.join(col_defs)})"))
-        conn.execute(text(f"INSERT INTO billing_statements_new SELECT {col_names} FROM billing_statements"))
-        conn.execute(text("DROP TABLE billing_statements"))
-        conn.execute(text("ALTER TABLE billing_statements_new RENAME TO billing_statements"))
-        conn.commit()
 
 
 def _migrate_billing_statements_needs_review_column():
@@ -202,8 +114,6 @@ def _migrate_billing_statements_nullable_period():
         conn.commit()
 
 
-_migrate_billing_statements_schema()
-_migrate_billing_statements_nullable_units_cost()
 _migrate_billing_statements_needs_review_column()
 _migrate_billing_statements_nullable_period()
 
@@ -275,55 +185,6 @@ async def get_readings():
     db.close()
     return readings
 
-def validate_reading(row: dict, row_num: int) -> dict | None:
-    raw = row.get("reading", "").strip()
-    if not raw:
-        return {"row_num": row_num, "reason": "missing_reading", "raw_value": raw}
-    try:
-        float(raw)
-    except ValueError:
-        return {"row_num": row_num, "reason": "invalid_reading", "raw_value": raw}
-    return None
-
-# Import CSV
-@app.post("/import-csv")
-async def import_csv(file: UploadFile = File(...)):
-    db = SessionLocal()
-
-    contents = await file.read()
-    csv_text = contents.decode("utf-8-sig")
-
-    reader = csv.DictReader(StringIO(csv_text), delimiter=",")
-
-    inserted = 0
-    skipped = 0
-    errors = []
-
-    for row_num, row in enumerate(reader, start=1):
-        reading_error = validate_reading(row, row_num)
-        if reading_error:
-            errors.append(reading_error)
-            skipped += 1
-            continue
-
-        try:
-            parsed_date = datetime.strptime(row["record_date"], "%Y-%m-%d")
-            reading = Reading(
-                mi=row["mi"],
-                reading=float(row["reading"]),
-                record_date=parsed_date,
-                unit=int(row["unit"])
-            )
-            db.add(reading)
-            inserted += 1
-        except Exception as e:
-            errors.append({"row_num": row_num, "reason": "parse_error", "raw_value": str(e)})
-            skipped += 1
-
-    db.commit()
-    db.close()
-
-    return {"inserted": inserted, "skipped": skipped, "errors": errors}
 
 class FilePreview(BaseModel):
     filename: str
@@ -415,8 +276,8 @@ def _build_file_preview(
     )
 
 
-@app.post("/import-csv/v2/preview")
-async def import_csv_v2_preview(
+@app.post("/import-csv/preview")
+async def import_csv_preview(
     files: list[UploadFile] = File(...),
     date_start: Optional[str] = Form(default=None),
     date_end: Optional[str] = Form(default=None),
@@ -447,8 +308,8 @@ async def import_csv_v2_preview(
     )
 
 
-@app.post("/import-csv/v2/confirm")
-async def import_csv_v2_confirm(
+@app.post("/import-csv/confirm")
+async def import_csv_confirm(
     files: list[UploadFile] = File(...),
     date_start: Optional[str] = Form(default=None),
     date_end: Optional[str] = Form(default=None),
@@ -1105,9 +966,15 @@ async def delete_billing_statement(stmt_id: int):
     return {"ok": True}
 
 
-# Verify billing statements against summed household meter readings
 @app.get("/billing-verify")
 async def billing_verify():
+    """Compare each billing statement's AI-extracted consumption against summed household meter readings.
+
+    Returns:
+        One entry per billing statement with a known period (needs-review stubs excluded),
+        each including the statement's reported vs. household-summed units, the discrepancy,
+        estimated money lost, and whether enough reading data existed to compute a comparison.
+    """
     db = SessionLocal()
     # Excludes needs-review stubs (see _create_stub_statement) — without a known billing
     # period there's nothing to verify against the household meter sums, and the date
@@ -1123,47 +990,20 @@ async def billing_verify():
     db.close()
 
     # Group readings by household (exclude the main/master meter, if present, to avoid double-counting)
-    by_mi: dict[str, list] = defaultdict(list)
+    readings_by_mi: dict[str, list] = defaultdict(list)
     for r in all_readings:
         if r.mi == "MAIN":
             continue
-        by_mi[r.mi].append(r)
+        readings_by_mi[r.mi].append((r.record_date, r.reading, r.unit))
 
     results = []
     for stmt in stmts:
         end_month = stmt.period_end_month or stmt.billing_month
         end_year = stmt.period_end_year or stmt.billing_year
 
-        # Exclusive upper bound: a reading taken during the start month itself is still a
-        # valid baseline. Bills only give month-level granularity, but real meter reads land
-        # mid-month, so a strict "before day 1" cutoff skips the correct baseline reading and
-        # falls back a full extra reading cycle — badly inflating the household sum (see
-        # _household_sum_units above for the same fix applied to the legacy migration path).
-        if stmt.billing_month == 12:
-            period_start_end_excl = date_type(stmt.billing_year + 1, 1, 1)
-        else:
-            period_start_end_excl = date_type(stmt.billing_year, stmt.billing_month + 1, 1)
-        if end_month == 12:
-            period_end = date_type(end_year + 1, 1, 1)
-        else:
-            period_end = date_type(end_year, end_month + 1, 1)
-
-        household_sum_units = 0.0
-        has_any_data = False
-
-        for readings in by_mi.values():
-            before_start = [r for r in readings if r.record_date.date() < period_start_end_excl]
-            before_end = [r for r in readings if r.record_date.date() < period_end]
-            if not before_start or not before_end:
-                continue
-            baseline = before_start[-1]
-            end_rdg = before_end[-1]
-            if baseline.id == end_rdg.id:
-                continue
-            household_sum_units += max(0.0, _to_units(end_rdg.reading, end_rdg.unit) - _to_units(baseline.reading, baseline.unit))
-            has_any_data = True
-
-        household_sum_units = round(household_sum_units, 3) if has_any_data else None
+        household_sum_units = _household_sum_units(
+            readings_by_mi, stmt.billing_month, stmt.billing_year, stmt.period_end_month, stmt.period_end_year
+        )
         discrepancy_units = (
             round(stmt.total_units_consumed - household_sum_units, 3)
             if household_sum_units is not None and stmt.total_units_consumed is not None
@@ -1187,7 +1027,7 @@ async def billing_verify():
             "household_sum_units": household_sum_units,
             "discrepancy_units": discrepancy_units,
             "money_lost": money_lost,
-            "has_sufficient_readings": has_any_data,
+            "has_sufficient_readings": household_sum_units is not None,
         })
 
     return results

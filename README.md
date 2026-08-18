@@ -272,7 +272,8 @@ water-meter/
 | POST | `/import-billing` | Upload and AI-extract a PDF bill (cloud key if set, else local Ollama) |
 | DELETE | `/billing-statements/{id}` | Delete a bill |
 | GET | `/billing-verify` | Household sum vs bill verification |
-| POST | `/import-csv` | Import meter readings from CSV |
+| POST | `/import-csv/preview` | Preview a household meter reading CSV import |
+| POST | `/import-csv/confirm` | Import a household meter reading CSV |
 | GET | `/leak/sessions` | List all daily leak detection sessions |
 | GET | `/leak/sessions/active` | Get (or create) the active leak detection session |
 | GET | `/leak/sessions/{id}/analysis` | Per-day main-meter-vs-submeter comparison and leak flags |

@@ -1,6 +1,7 @@
 # Working conventions
 
 - **Always create a new branch when starting a new feature.** Never commit feature work directly to `master`. Branch naming follows the existing repo convention: `feature/<kebab-case-name>` (see `git branch -a` for examples).
+- **Never push branches or open pull requests.** The user does this manually, always. Commits are fine; leave pushing and PR creation to the user — provide a PR description on request instead of opening the PR.
 - **Docstring convention**: use Google-style (`Args:`/`Returns:`) for functions where a docstring is warranted — i.e. where the *why* or the return shape isn't obvious from the name/signature/type hints alone. Trivial route handlers and self-explanatory helpers can stay undocumented. Applies to new/edited functions going forward; there's no mandate to retrofit untouched existing code.
 - **Never commit real personal data as test fixtures or sample data.** Real bill PDFs, CSVs, or DB snapshots must not be added as committed test fixtures — use fabricated/synthetic data instead. Don't force-add anything under a `.gitignore`d path (`test_data/`, `backend/water_meter.db`, `data/`) without first confirming it contains no real personal information.
 - **Security vulnerabilities are never filed as public GitHub issues.** Use GitHub's private vulnerability reporting (repo Security tab → private security advisories) instead — draft privately, work the fix, then decide whether to publish.

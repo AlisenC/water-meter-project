@@ -177,119 +177,135 @@ async def get_active_session():
     return result
 
 
-@router.post("/submeter/import/preview")
-async def submeter_import_preview(file: UploadFile = File(...)):
-    file_bytes = await file.read()
+def _parse_submeter_csv(file_bytes: bytes, filename: str):
+    """Adapts csv_parser.parse_csv_bytes's 3-tuple to the (valid_rows, error_rows) shape
+    parse_main_meter_csv_bytes already returns, so both can share _leak_import_preview/confirm.
+    """
+    _, valid_rows, error_rows = csv_parser.parse_csv_bytes(
+        file_bytes, filename, {}, fmt_override="A", parse_datetime=True
+    )
+    return valid_rows, error_rows
+
+
+def _leak_import_preview(file_bytes: bytes, filename: str, parse_fn, existing_keys_fn, dedup_key_fn, date_field: str):
+    """Shared preview step for the daily leak-detection CSV imports (submeter, main meter).
+
+    Args:
+        file_bytes: Raw uploaded file content.
+        filename: Uploaded file's name, used in error rows and duplicate messages.
+        parse_fn: (file_bytes, filename) -> (valid_rows, error_rows).
+        existing_keys_fn: (db, session_id) -> set of existing dedup keys for the active session.
+        dedup_key_fn: row -> hashable key used to detect duplicates against existing_keys_fn's result.
+        date_field: Row dict key holding each row's date/datetime, used for date_min/date_max.
+
+    Returns:
+        (valid_rows, preview) where preview is the common preview response dict (filename,
+        valid_rows, error_rows, date_min, date_max, errors); callers may add format-specific
+        fields (e.g. "households") before returning it.
+    """
     try:
-        _, valid_rows, error_rows = csv_parser.parse_csv_bytes(
-            file_bytes, file.filename, {}, fmt_override="A", parse_datetime=True
-        )
+        valid_rows, error_rows = parse_fn(file_bytes, filename)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
     db = SessionLocal()
     active = _active_session_readonly(db)
-    existing_keys = _existing_submeter_keys(db, active.id) if active else set()
+    existing_keys = existing_keys_fn(db, active.id) if active else set()
     db.close()
 
-    valid_rows, duplicate_rows = _split_duplicates(
-        valid_rows, existing_keys, lambda row: (row["mi"], row["record_date"]), file.filename
-    )
+    valid_rows, duplicate_rows = _split_duplicates(valid_rows, existing_keys, dedup_key_fn, filename)
     error_rows = error_rows + duplicate_rows
 
-    dates = [r["record_date"] for r in valid_rows]
-    return {
-        "filename": file.filename,
+    dates = [r[date_field] for r in valid_rows]
+    preview = {
+        "filename": filename,
         "valid_rows": len(valid_rows),
         "error_rows": len(error_rows),
-        "households": sorted({r["mi"] for r in valid_rows}),
         "date_min": min(dates).isoformat() if dates else None,
         "date_max": max(dates).isoformat() if dates else None,
         "errors": error_rows,
     }
+    return valid_rows, preview
 
 
-@router.post("/submeter/import/confirm")
-async def submeter_import_confirm(file: UploadFile = File(...)):
-    file_bytes = await file.read()
+def _leak_import_confirm(file_bytes: bytes, filename: str, parse_fn, existing_keys_fn, dedup_key_fn, build_model_fn):
+    """Shared confirm step for the daily leak-detection CSV imports (submeter, main meter).
+
+    Args:
+        file_bytes: Raw uploaded file content.
+        filename: Uploaded file's name, used in error rows and duplicate messages.
+        parse_fn: (file_bytes, filename) -> (valid_rows, error_rows).
+        existing_keys_fn: (db, session_id) -> set of existing dedup keys for the session.
+        dedup_key_fn: row -> hashable key used to detect duplicates against existing_keys_fn's result.
+        build_model_fn: (session_id, row) -> ORM model instance to insert.
+
+    Returns:
+        {"inserted": int, "skipped": int, "errors": list} summarizing the import.
+    """
     try:
-        _, valid_rows, error_rows = csv_parser.parse_csv_bytes(
-            file_bytes, file.filename, {}, fmt_override="A", parse_datetime=True
-        )
+        valid_rows, error_rows = parse_fn(file_bytes, filename)
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e))
 
     db = SessionLocal()
     session = _get_or_create_active_session(db)
 
-    existing_keys = _existing_submeter_keys(db, session.id)
-    valid_rows, duplicate_rows = _split_duplicates(
-        valid_rows, existing_keys, lambda row: (row["mi"], row["record_date"]), file.filename
-    )
+    existing_keys = existing_keys_fn(db, session.id)
+    valid_rows, duplicate_rows = _split_duplicates(valid_rows, existing_keys, dedup_key_fn, filename)
     error_rows = error_rows + duplicate_rows
 
     for row in valid_rows:
-        db.add(LeakSubmeterReading(
-            session_id=session.id,
-            mi=row["mi"],
-            reading=row["reading"],
-            record_date=row["record_date"],
-            unit=row["unit"],
-        ))
+        db.add(build_model_fn(session.id, row))
     db.commit()
     db.close()
     return {"inserted": len(valid_rows), "skipped": len(error_rows), "errors": error_rows}
 
 
+@router.post("/submeter/import/preview")
+async def submeter_import_preview(file: UploadFile = File(...)):
+    file_bytes = await file.read()
+    valid_rows, preview = _leak_import_preview(
+        file_bytes, file.filename, _parse_submeter_csv, _existing_submeter_keys,
+        lambda row: (row["mi"], row["record_date"]), "record_date",
+    )
+    preview["households"] = sorted({r["mi"] for r in valid_rows})
+    return preview
+
+
+@router.post("/submeter/import/confirm")
+async def submeter_import_confirm(file: UploadFile = File(...)):
+    file_bytes = await file.read()
+    return _leak_import_confirm(
+        file_bytes, file.filename, _parse_submeter_csv, _existing_submeter_keys,
+        lambda row: (row["mi"], row["record_date"]),
+        lambda session_id, row: LeakSubmeterReading(
+            session_id=session_id,
+            mi=row["mi"],
+            reading=row["reading"],
+            record_date=row["record_date"],
+            unit=row["unit"],
+        ),
+    )
+
+
 @router.post("/main-meter/import/preview")
 async def main_meter_import_preview(file: UploadFile = File(...)):
     file_bytes = await file.read()
-    try:
-        valid_rows, error_rows = parse_main_meter_csv_bytes(file_bytes, file.filename)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-
-    db = SessionLocal()
-    active = _active_session_readonly(db)
-    existing_keys = _existing_main_meter_keys(db, active.id) if active else set()
-    db.close()
-
-    valid_rows, duplicate_rows = _split_duplicates(
-        valid_rows, existing_keys, lambda row: row["read_time"], file.filename
+    _, preview = _leak_import_preview(
+        file_bytes, file.filename, parse_main_meter_csv_bytes, _existing_main_meter_keys,
+        lambda row: row["read_time"], "read_time",
     )
-    error_rows = error_rows + duplicate_rows
-
-    dates = [r["read_time"] for r in valid_rows]
-    return {
-        "filename": file.filename,
-        "valid_rows": len(valid_rows),
-        "error_rows": len(error_rows),
-        "date_min": min(dates).isoformat() if dates else None,
-        "date_max": max(dates).isoformat() if dates else None,
-        "errors": error_rows,
-    }
+    return preview
 
 
 @router.post("/main-meter/import/confirm")
 async def main_meter_import_confirm(file: UploadFile = File(...)):
     file_bytes = await file.read()
-    try:
-        valid_rows, error_rows = parse_main_meter_csv_bytes(file_bytes, file.filename)
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-
-    db = SessionLocal()
-    session = _get_or_create_active_session(db)
-
-    existing_keys = _existing_main_meter_keys(db, session.id)
-    valid_rows, duplicate_rows = _split_duplicates(
-        valid_rows, existing_keys, lambda row: row["read_time"], file.filename
-    )
-    error_rows = error_rows + duplicate_rows
-
-    for row in valid_rows:
-        db.add(LeakMainMeterReading(
-            session_id=session.id,
+    return _leak_import_confirm(
+        file_bytes, file.filename, parse_main_meter_csv_bytes, _existing_main_meter_keys,
+        lambda row: row["read_time"],
+        lambda session_id, row: LeakMainMeterReading(
+            session_id=session_id,
             account_id=row["account_id"],
             meter_id=row["meter_id"],
             meter_sn=row["meter_sn"],
@@ -298,10 +314,8 @@ async def main_meter_import_confirm(file: UploadFile = File(...)):
             flow_time=row["flow_time"],
             flow_value=row["flow_value"],
             register=row["register"],
-        ))
-    db.commit()
-    db.close()
-    return {"inserted": len(valid_rows), "skipped": len(error_rows), "errors": error_rows}
+        ),
+    )
 
 
 @router.get("/sessions/{session_id}/analysis")

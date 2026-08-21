@@ -116,7 +116,7 @@ export default function ImportWizard({ onImportSuccess, onClose }) {
     setPreviewing(true);
     setPreviewError(null);
     try {
-      const res = await api.post("/import-csv/v2/preview", buildFormData());
+      const res = await api.post("/import-csv/preview", buildFormData());
       setPreviewData(res.data);
       setStep(1);
     } catch (err) {
@@ -129,7 +129,7 @@ export default function ImportWizard({ onImportSuccess, onClose }) {
   async function handleConfirm() {
     setConfirming(true);
     try {
-      const res = await api.post("/import-csv/v2/confirm", buildFormData());
+      const res = await api.post("/import-csv/confirm", buildFormData());
       setResultData(res.data);
       setStep(2);
     } catch (err) {

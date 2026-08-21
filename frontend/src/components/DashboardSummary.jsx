@@ -152,7 +152,7 @@ export default function DashboardSummary({
             {anomalies.map((a, i) => (
               <li key={i} className="px-5 py-3 flex items-center justify-between gap-4">
                 <div>
-                  <p className="text-sm font-semibold text-gray-900">{a.household}</p>
+                  <p className="text-sm font-semibold text-gray-900">{a.mi}</p>
                   {a.is_gap_induced && (
                     <p className="text-xs text-gray-400 mt-0.5">
                       Gap-induced: {a.gap_days}d gap vs {a.median_interval_days}d median
@@ -161,7 +161,7 @@ export default function DashboardSummary({
                 </div>
                 <div className="flex items-center gap-3 flex-shrink-0">
                   <span className="text-xs text-gray-500">
-                    {new Date(a.reading_date).toLocaleDateString("en-AU", { month: "short", year: "numeric" })}
+                    {new Date(a.current_period_end).toLocaleDateString("en-AU", { month: "short", year: "numeric" })}
                   </span>
                   <span
                     className={`text-xs font-semibold px-2.5 py-1 rounded-full ${
@@ -170,7 +170,7 @@ export default function DashboardSummary({
                         : "bg-orange-100 text-orange-700"
                     }`}
                   >
-                    +{a.increase_percent}%
+                    +{a.percent_increase}%
                   </span>
                 </div>
               </li>

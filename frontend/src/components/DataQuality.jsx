@@ -103,10 +103,10 @@ export default function DataQuality({ importReport, anomalies = [] }) {
                         className="w-full flex justify-between items-center px-3 py-2 text-left"
                       >
                         <span>
-                          <span className="font-semibold">{a.household}</span>
+                          <span className="font-semibold">{a.mi}</span>
                           {" — "}
-                          {a.increase_percent}% spike on{" "}
-                          {new Date(a.reading_date).toLocaleDateString("en-AU", {
+                          {a.percent_increase}% spike on{" "}
+                          {new Date(a.current_period_end).toLocaleDateString("en-AU", {
                             month: "short",
                             year: "numeric",
                           })}
@@ -125,8 +125,8 @@ export default function DataQuality({ importReport, anomalies = [] }) {
                       </button>
                       {isExpanded && (
                         <div className="px-3 pb-2 text-xs space-y-0.5 text-gray-700">
-                          <p>Previous usage: <span className="font-mono">{a.previous_usage}</span></p>
-                          <p>Current usage: <span className="font-mono">{a.current_usage}</span></p>
+                          <p>Baseline daily rate: <span className="font-mono">{a.baseline_daily_rate_units} units/day</span></p>
+                          <p>Current daily rate: <span className="font-mono">{a.current_daily_rate_units} units/day</span></p>
                           <p>
                             Gap before reading: <span className="font-mono">{a.gap_days}d</span>
                             {" vs median "}

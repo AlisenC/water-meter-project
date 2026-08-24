@@ -96,6 +96,7 @@ function App() {
   }, []);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- pre-existing, out of scope for this change
     checkOracleStatus();
     const id = setInterval(checkOracleStatus, 30_000);
     return () => clearInterval(id);

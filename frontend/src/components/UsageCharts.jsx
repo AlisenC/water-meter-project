@@ -87,9 +87,6 @@ export default function UsageCharts({ readings }) {
     let householdSum = 0;
     for (const mi of subMeters) {
       const group = allGroups[mi];
-      // Find the reading closest to periodStart and periodEnd within this household
-      const prevR = group.filter((r) => new Date(r.record_date) <= periodEnd && new Date(r.record_date) >= periodStart)
-        .sort((a, b) => new Date(a.record_date) - new Date(b.record_date));
       // Use readings that bracket this same period
       const before = group.filter((r) => new Date(r.record_date) <= periodStart).pop();
       const after = group.filter((r) => new Date(r.record_date) <= periodEnd).pop();

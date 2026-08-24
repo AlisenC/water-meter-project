@@ -13,17 +13,14 @@ from datetime import datetime, date as date_type
 from pydantic import BaseModel
 from typing import Optional
 from collections import defaultdict
-from statistics import median
 from .ai_agent import router as ai_router
 from .oracle_ai import router as oracle_router
 from .leak_detection import router as leak_router
-from . import csv_parser
+from . import csv_parser, leak_rules
 from .units import to_units as _to_units
 import anthropic as anthropic_sdk
 import httpx
 from pypdf import PdfReader, PdfWriter
-
-GAP_MULTIPLIER = 1.5
 
 DISCREPANCY_TOLERANCE_UNITS = 1.0  # ~748 gallons; a statement/household-sum pair within this is considered "matching"
 
@@ -1033,13 +1030,18 @@ async def billing_verify():
     return results
 
 
-def compute_median_interval(values: list) -> float:
-    if len(values) < 2:
-        return 1.0
-    gaps = [(values[i][0] - values[i - 1][0]).days for i in range(1, len(values))]
-    return median(gaps) if gaps else 1.0
+# Detect anomalies in usage. Uses leak_rules.detect_historical_deviation's
+# day-normalized, rolling-90-day-baseline methodology (SFPUC rule 4) -- better
+# than the old flat previous-vs-current-period comparison since it isn't skewed
+# by differing period lengths and isn't thrown off by a single unusual prior
+# period. But the SFPUC doc's own trigger multiplier (1.5x / 50% increase,
+# leak_rules.RULE4_TRIGGER_MULTIPLIER) is too loose for individual households --
+# it flags far more households than the old rule ever did. Keep the old rule's
+# stricter 2.5x (150%) threshold instead, so this behaves like the old spike
+# check but with a sturdier baseline underneath it.
+ANOMALY_TRIGGER_MULTIPLIER = 2.5
 
-# Detect anomalies in usage
+
 @app.get("/anomalies")
 async def detect_anomalies():
     db = SessionLocal()
@@ -1047,39 +1049,13 @@ async def detect_anomalies():
     db.close()
 
     data = defaultdict(list)
-
     for r in rows:
-        data[r.mi].append((r.record_date, r.reading))
+        data[r.mi].append((r.record_date, _to_units(r.reading, r.unit)))
 
     anomalies = []
-
     for household, values in data.items():
-        if len(values) < 3:
-            continue
-
         values.sort(key=lambda x: x[0])
-        med_interval = compute_median_interval(values)
-
-        for i in range(2, len(values)):
-            prev_usage = values[i - 1][1] - values[i - 2][1]
-            curr_usage = values[i][1] - values[i - 1][1]
-
-            if prev_usage <= 0:
-                continue
-
-            pct = ((curr_usage - prev_usage) / prev_usage) * 100
-
-            if pct > 150:
-                gap_days = (values[i][0] - values[i - 1][0]).days
-                anomalies.append({
-                    "household": household,
-                    "previous_usage": round(prev_usage, 4),
-                    "current_usage": round(curr_usage, 4),
-                    "increase_percent": round(pct, 2),
-                    "reading_date": values[i][0].isoformat(),
-                    "gap_days": gap_days,
-                    "median_interval_days": round(med_interval, 1),
-                    "is_gap_induced": gap_days > GAP_MULTIPLIER * med_interval,
-                })
+        for alert in leak_rules.detect_historical_deviation(values, trigger_multiplier=ANOMALY_TRIGGER_MULTIPLIER):
+            anomalies.append({"mi": household, **alert})
 
     return anomalies

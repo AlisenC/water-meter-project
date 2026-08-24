@@ -25,6 +25,7 @@ A short-term workspace for spotting leaks between bills, kept completely separat
 - Import daily **submeter** readings and daily **main meter** readings (AMI "range export" CSV) into an active session
 - Automatic daily-delta comparison: sums all submeter deltas and checks them against the main meter's delta for the same period
 - Flags a **potential leak** whenever the submeter total exceeds the main meter, with a comparison line chart and a per-day table
+- Below that comparison, an **SFPUC / EyeOnWater Main Meter Rules** section runs three official leak-detection rules against the main meter's own readings — 24h continuous flow, 48h/72h volume threshold, and nighttime usage ratio — main meter only, since submeter data is manually read and too sparse for these rules to ever apply
 - **Archive Session** clears the active workspace for a fresh investigation while keeping the archived data viewable
 - **Restore** brings an archived session back as the active workspace at any time
 
@@ -215,7 +216,19 @@ Export a "range export" CSV from your main meter's AMI provider (columns: `Accou
 
 Once both sides have at least two days of data, the active session shows a line chart and a table comparing the **main meter flow** against the **summed submeter deltas** for each matching period. Any day where the submeter total exceeds the main meter's flow is highlighted red and marked **Potential Leak**.
 
-### 4. Archive when the investigation is done
+### 4. Review the SFPUC / EyeOnWater rules
+
+Below the comparison, a **Property Profile** panel shows the submeter household count and which volume-threshold window applies — **Standard** (48h) for fewer than 6 households, **Multi-Family** (72h) at 6 or more. The **Main Meter** card underneath evaluates three rules against the main meter's own readings only:
+
+| Rule | Triggers when |
+|------|---------------|
+| **Continuous Flow** | Flow stays above a low threshold continuously for 24+ hours |
+| **Volume Threshold** | Flow stays above a higher threshold continuously for 48h (72h if Multi-Family) |
+| **Nighttime Ratio** | A night's usage (12am–5am) exceeds 2x the median of prior nights |
+
+Each rule lists its alerts in a table; an alert still in effect as of the most recent reading is tagged **Ongoing** next to its end time, otherwise it's already resolved. Submeter readings are excluded from these rules since they're sparse, manually-transcribed entries that would never satisfy a continuous-coverage check.
+
+### 5. Archive when the investigation is done
 
 Click **Archive Session** and confirm. The active workspace resets to empty for the next investigation, while the archived session (and all its data) stays viewable under the **Archived Sessions** tab. Click **Restore** on an archived session to bring it back as the active workspace at any time — if the current active workspace has data of its own, it's archived first so nothing is lost.
 
@@ -233,6 +246,7 @@ water-meter/
 │   ├── csv_parser.py        # CSV import with format detection
 │   ├── units.py             # Shared gallons↔units-of-water conversion
 │   ├── leak_detection.py    # /leak/* endpoints (sessions, imports, analysis)
+│   ├── leak_rules.py        # SFPUC/EyeOnWater rule engine (continuous flow, volume threshold, nighttime ratio, historical deviation)
 │   ├── main_meter_csv.py    # AMI "range export" main meter CSV parser
 │   ├── oracle_connection.py # Oracle connection pool + per-request creds
 │   ├── oracle_ai.py         # /oracle/* endpoints (status, sync, NL2SQL, vector search)
@@ -267,7 +281,7 @@ water-meter/
 | GET | `/readings` | List all meter readings |
 | POST | `/readings` | Add a reading |
 | DELETE | `/readings/{id}` | Delete a reading |
-| GET | `/anomalies` | Spike/anomaly detection results |
+| GET | `/anomalies` | Spike detection: flags a household whose current daily usage rate is 2.5x+ its rolling 90-day baseline |
 | GET | `/billing-statements` | List imported bills |
 | POST | `/import-billing` | Upload and AI-extract a PDF bill (cloud key if set, else local Ollama) |
 | DELETE | `/billing-statements/{id}` | Delete a bill |
@@ -276,7 +290,7 @@ water-meter/
 | POST | `/import-csv/confirm` | Import a household meter reading CSV |
 | GET | `/leak/sessions` | List all daily leak detection sessions |
 | GET | `/leak/sessions/active` | Get (or create) the active leak detection session |
-| GET | `/leak/sessions/{id}/analysis` | Per-day main-meter-vs-submeter comparison and leak flags |
+| GET | `/leak/sessions/{id}/analysis` | Per-day main-meter-vs-submeter comparison and leak flags, plus SFPUC/EyeOnWater rule results for the main meter |
 | POST | `/leak/submeter/import/preview` | Preview a daily submeter CSV |
 | POST | `/leak/submeter/import/confirm` | Import a daily submeter CSV into the active session |
 | POST | `/leak/main-meter/import/preview` | Preview a daily main meter (AMI) CSV |

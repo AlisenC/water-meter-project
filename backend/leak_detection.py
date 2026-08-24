@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
-from . import csv_parser
+from . import csv_parser, leak_rules
 from .database import SessionLocal
 from .main_meter_csv import parse_main_meter_csv_bytes
 from .models import LeakMainMeterReading, LeakSession, LeakSubmeterReading
@@ -143,10 +143,23 @@ def _existing_main_meter_keys(db, session_id):
     }
 
 
+def _property_mode(household_count: int) -> str:
+    """"standard" (48h) or "multi_family" (72h) volume-threshold window, per the
+    submeter household count. Assumes complete submeter coverage -- every
+    household on the property has been imported, so distinct `mi` count is an
+    accurate stand-in for unit count. A main-meter-only session (no submeter
+    data at all) derives to 0 and is treated as "standard".
+    """
+    if household_count >= leak_rules.MULTI_FAMILY_UNIT_THRESHOLD:
+        return "multi_family"
+    return "standard"
+
+
 def _session_summary(db, session: LeakSession) -> dict:
     submeter_rows = db.query(LeakSubmeterReading).filter(LeakSubmeterReading.session_id == session.id).all()
     main_rows = db.query(LeakMainMeterReading).filter(LeakMainMeterReading.session_id == session.id).all()
     dates = [r.record_date for r in submeter_rows] + [r.read_time for r in main_rows]
+    household_count = len({r.mi for r in submeter_rows})
     return {
         "id": session.id,
         "status": session.status,
@@ -156,6 +169,8 @@ def _session_summary(db, session: LeakSession) -> dict:
         "main_meter_row_count": len(main_rows),
         "date_min": min(dates).isoformat() if dates else None,
         "date_max": max(dates).isoformat() if dates else None,
+        "household_count": household_count,
+        "property_mode": _property_mode(household_count),
     }
 
 
@@ -417,7 +432,33 @@ async def session_analysis(session_id: int):
             "is_leak": difference is not None and difference > LEAK_EPSILON,
         })
 
-    return {"main_flow_series": main_flow_series, "periods": periods}
+    # SFPUC rules 1-3 (continuous flow, volume threshold, nighttime ratio), main
+    # meter only -- submeter data is manually read and too sparse for these rules
+    # to ever apply. Additive alongside the main-vs-submeter comparison above, not
+    # a replacement of it.
+    household_count = len({r.mi for r in submeter_rows})
+    property_mode = _property_mode(household_count)
+    multi_family = property_mode == "multi_family"
+
+    main_readings = [(r.read_time, r.read_value) for r in main_rows]
+    sfpuc_main_meter = leak_rules.evaluate_meter_rules(
+        main_readings,
+        scope="main",
+        mi=None,
+        rule2_duration=leak_rules.RULE2_MULTI_FAMILY_DURATION if multi_family else leak_rules.RULE2_STANDARD_DURATION,
+        nighttime_multiplier=leak_rules.NIGHT_STANDARD_MULTIPLIER,
+        break_keys=[(r.meter_sn, r.register) for r in main_rows],
+    )
+
+    return {
+        "main_flow_series": main_flow_series,
+        "periods": periods,
+        "sfpuc": {
+            "property_mode": property_mode,
+            "household_count": household_count,
+            "main_meter": sfpuc_main_meter,
+        },
+    }
 
 
 @router.post("/sessions/{session_id}/archive")

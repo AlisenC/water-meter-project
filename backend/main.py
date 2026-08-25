@@ -1030,15 +1030,14 @@ async def billing_verify():
     return results
 
 
-# Detect anomalies in usage. Uses leak_rules.detect_historical_deviation's
-# day-normalized, rolling-90-day-baseline methodology (SFPUC rule 4) -- better
-# than the old flat previous-vs-current-period comparison since it isn't skewed
-# by differing period lengths and isn't thrown off by a single unusual prior
-# period. But the SFPUC doc's own trigger multiplier (1.5x / 50% increase,
-# leak_rules.RULE4_TRIGGER_MULTIPLIER) is too loose for individual households --
-# it flags far more households than the old rule ever did. Keep the old rule's
-# stricter 2.5x (150%) threshold instead, so this behaves like the old spike
-# check but with a sturdier baseline underneath it.
+# Detect anomalies in usage via leak_rules.detect_historical_deviation's
+# day-normalized, rolling-90-day-baseline methodology (SFPUC rule 4), which
+# isn't skewed by differing period lengths and isn't thrown off by a single
+# unusual prior period.
+#
+# The SFPUC doc's own trigger multiplier (leak_rules.RULE4_TRIGGER_MULTIPLIER,
+# 1.5x / 50% increase) is too loose for individual households -- it flags far
+# more households than this stricter 2.5x (150%) threshold does.
 ANOMALY_TRIGGER_MULTIPLIER = 2.5
 
 

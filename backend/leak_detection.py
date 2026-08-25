@@ -333,6 +333,59 @@ async def main_meter_import_confirm(file: UploadFile = File(...)):
     )
 
 
+def _build_periods(submeter_rows, main_rows) -> list[dict]:
+    """Main-vs-submeter comparison rows, one per submeter reading-to-reading window.
+
+    Args:
+        submeter_rows: LeakSubmeterReading rows for the session, any order.
+        main_rows: LeakMainMeterReading rows for the session, ordered by read_time.
+
+    Returns:
+        Period dicts sorted by period_start.
+    """
+    by_mi = defaultdict(list)
+    for r in submeter_rows:
+        by_mi[r.mi].append(r)
+
+    # Each household's own reading-to-reading deltas define the periods, rather
+    # than forward-filling onto a shared date grid -- that way a period's window
+    # always matches what its submeter_delta covers, so main_delta (below) is a
+    # fair comparison. A skipped reporting day just widens that household's own
+    # period instead of smearing its usage into a neighboring one.
+    # (by_mi's lists are already sorted by record_date, from submeter_rows.)
+    period_deltas = defaultdict(float)
+    for rows in by_mi.values():
+        for prev_r, curr_r in zip(rows, rows[1:]):
+            key = (prev_r.record_date, curr_r.record_date)
+            period_deltas[key] += max(
+                0.0, to_units(curr_r.reading, curr_r.unit) - to_units(prev_r.reading, prev_r.unit)
+            )
+
+    periods = []
+    for (t_prev, t_curr), submeter_delta in sorted(period_deltas.items()):
+        main_start_row = _closest_main_row(main_rows, t_prev)
+        main_end_row = _closest_main_row(main_rows, t_curr)
+
+        main_delta = None
+        if main_start_row is not None and main_end_row is not None and main_start_row.id != main_end_row.id:
+            main_delta = round(main_end_row.read_value - main_start_row.read_value, 3)
+
+        submeter_delta = round(submeter_delta, 3)
+        difference = round(main_delta - submeter_delta, 3) if main_delta is not None else None
+
+        periods.append({
+            "period_start": t_prev.isoformat(),
+            "period_end": t_curr.isoformat(),
+            "submeter_delta": submeter_delta,
+            "main_delta": main_delta,
+            "main_period_start_actual": main_start_row.read_time.isoformat() if main_start_row else None,
+            "main_period_end_actual": main_end_row.read_time.isoformat() if main_end_row else None,
+            "difference": difference,
+            "is_leak": difference is not None and difference > LEAK_EPSILON,
+        })
+    return periods
+
+
 @router.get("/sessions/{session_id}/analysis")
 async def session_analysis(session_id: int):
     db = SessionLocal()
@@ -377,60 +430,7 @@ async def session_analysis(session_id: int):
                 "flow": round(curr_row.read_value - prev_row.read_value, 3),
             })
 
-    by_mi = defaultdict(list)
-    for r in submeter_rows:
-        by_mi[r.mi].append(r)
-
-    # Periods are anchored to the submeters' own reporting cadence (sparse and
-    # irregular) rather than the main meter's, since that's what actually varies
-    # here. For each period, the main-meter side of the comparison is resolved by
-    # finding the closest main-meter reading to each boundary — this is what lets
-    # the main meter be imported at any granularity (daily, hourly, 15-min) without
-    # requiring it to align with submeter timestamps.
-    submeter_times = sorted({r.record_date for r in submeter_rows})
-
-    periods = []
-    for i in range(1, len(submeter_times)):
-        t_prev = submeter_times[i - 1]
-        t_curr = submeter_times[i]
-
-        submeter_delta = 0.0
-        has_submeter_data = False
-        for rows in by_mi.values():
-            before_start = [r for r in rows if r.record_date <= t_prev]
-            before_end = [r for r in rows if r.record_date <= t_curr]
-            if not before_start or not before_end:
-                continue
-            baseline = before_start[-1]
-            end_rdg = before_end[-1]
-            if baseline.id == end_rdg.id:
-                continue
-            submeter_delta += max(0.0, to_units(end_rdg.reading, end_rdg.unit) - to_units(baseline.reading, baseline.unit))
-            has_submeter_data = True
-
-        if not has_submeter_data:
-            continue
-
-        main_start_row = _closest_main_row(main_rows, t_prev)
-        main_end_row = _closest_main_row(main_rows, t_curr)
-
-        main_delta = None
-        if main_start_row is not None and main_end_row is not None and main_start_row.id != main_end_row.id:
-            main_delta = round(main_end_row.read_value - main_start_row.read_value, 3)
-
-        submeter_delta = round(submeter_delta, 3)
-        difference = round(main_delta - submeter_delta, 3) if main_delta is not None else None
-
-        periods.append({
-            "period_start": t_prev.isoformat(),
-            "period_end": t_curr.isoformat(),
-            "submeter_delta": submeter_delta,
-            "main_delta": main_delta,
-            "main_period_start_actual": main_start_row.read_time.isoformat() if main_start_row else None,
-            "main_period_end_actual": main_end_row.read_time.isoformat() if main_end_row else None,
-            "difference": difference,
-            "is_leak": difference is not None and difference > LEAK_EPSILON,
-        })
+    periods = _build_periods(submeter_rows, main_rows)
 
     # SFPUC rules 1-3 (continuous flow, volume threshold, nighttime ratio), main
     # meter only -- submeter data is manually read and too sparse for these rules

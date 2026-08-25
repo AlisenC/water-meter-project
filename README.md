@@ -74,31 +74,6 @@ docker compose down -v
 
 ---
 
-## Local development (without Docker)
-
-**Backend**
-
-```bash
-cd backend
-python -m venv venv
-venv\Scripts\activate        # Windows
-# venv/bin/activate          # macOS/Linux
-pip install -r requirements.txt
-uvicorn backend.main:app --reload
-```
-
-**Frontend**
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Frontend: http://localhost:5173 · Backend: http://localhost:8000
-
----
-
 ## Configuration
 
 ### AI provider (required for AI chat; PDF import falls back to a local model)
@@ -126,12 +101,9 @@ model (`llama3.1`) on first run — no separate install needed, though the first
 downloads several GB and takes a while. It runs CPU-only unless you add GPU passthrough
 to the `ollama` service yourself.
 
-For non-Docker local dev, install Ollama, run `ollama serve`, then `ollama pull llama3.1`
-— the backend's built-in default (`http://localhost:11434`) already points at it.
-
 | Env var | Default | Where |
 |---------|---------|-------|
-| `OLLAMA_BASE_URL` | `http://localhost:11434` (backend default); `http://ollama:11434` (docker-compose) | Where the backend looks for Ollama |
+| `OLLAMA_BASE_URL` | `http://ollama:11434` (docker-compose) | Where the backend looks for Ollama |
 | `OLLAMA_MODEL` | `llama3.1` | Model used for extraction, and what `ollama-pull` fetches in Docker |
 
 ---

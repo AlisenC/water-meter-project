@@ -338,30 +338,21 @@ def _build_periods(submeter_rows, main_rows) -> list[dict]:
 
     Args:
         submeter_rows: LeakSubmeterReading rows for the session, any order.
-        main_rows: LeakMainMeterReading rows for the session, ordered by read_time
-            (required by _closest_main_row).
+        main_rows: LeakMainMeterReading rows for the session, ordered by read_time.
 
     Returns:
-        Period dicts (period_start/end, submeter_delta, main_delta,
-        main_period_start/end_actual, difference, is_leak), sorted by period_start.
+        Period dicts sorted by period_start.
     """
     by_mi = defaultdict(list)
     for r in submeter_rows:
         by_mi[r.mi].append(r)
 
-    # Periods are anchored to each household's own consecutive submeter readings
-    # rather than a shared date grid. Summing every household's own reading-to-
-    # reading delta directly -- instead of forward-filling a household's "last
-    # known" value across dates it didn't report -- means a period's window
-    # always matches exactly what its submeter_delta covers, so main_delta
-    # (computed for that same window via the closest-reading lookup below, which
-    # is what lets the main meter be imported at any granularity without
-    # requiring it to align with submeter timestamps) is a fair comparison. If a
-    # household skips a reporting day, its own next reading simply produces a
-    # wider period covering the skipped gap, rather than smearing that gap's
-    # usage into whatever narrow period another household's reading happens to
-    # land on. by_mi's lists are already sorted by record_date, since they're
-    # built from submeter_rows, which is queried in that order.
+    # Each household's own reading-to-reading deltas define the periods, rather
+    # than forward-filling onto a shared date grid -- that way a period's window
+    # always matches what its submeter_delta covers, so main_delta (below) is a
+    # fair comparison. A skipped reporting day just widens that household's own
+    # period instead of smearing its usage into a neighboring one.
+    # (by_mi's lists are already sorted by record_date, from submeter_rows.)
     period_deltas = defaultdict(float)
     for rows in by_mi.values():
         for prev_r, curr_r in zip(rows, rows[1:]):

@@ -1,5 +1,5 @@
 """Pure, DB-agnostic implementation of the SFPUC/EyeOnWater leak-detection rules
-(GitHub issue #24; source: "SFPUC & EyeOnWater Leak Detection Technical Rules").
+(source: "SFPUC & EyeOnWater Leak Detection Technical Rules").
 
 Every function here takes plain (timestamp, cumulative_value) reading sequences
 already normalized to CCF by the caller, so this module has no SQLAlchemy/session
@@ -62,8 +62,7 @@ NIGHT_STANDARD_MULTIPLIER = 2.0  # SFPUC doc
 RULE4_BASELINE_WINDOW = timedelta(days=90)
 RULE4_TRIGGER_MULTIPLIER = 1.5
 
-# Gap-vs-median-interval multiplier for flagging a spike as gap-induced. Carried
-# over from the old detect_anomalies() in main.py.
+# Gap-vs-median-interval multiplier for flagging a spike as gap-induced.
 GAP_MULTIPLIER = 1.5
 
 
@@ -273,8 +272,8 @@ def detect_nighttime_ratio_anomalies(
 
 
 def compute_median_interval(values: list[tuple[datetime, float]]) -> float:
-    """Moved verbatim from main.py's old detect_anomalies (its only call site) --
-    pure, belongs with rule 4.
+    """Computes the typical gap between consecutive readings, used by rule 4 to
+    tell an anomalous spike apart from one that's just a wide reading gap.
 
     Args:
         values: Sorted (date, reading) pairs.

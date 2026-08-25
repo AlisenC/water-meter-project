@@ -7,7 +7,6 @@ D0 = datetime(2024, 1, 1)
 D1 = datetime(2024, 1, 2)
 D2 = datetime(2024, 1, 3)
 D3 = datetime(2024, 1, 4)
-D4 = datetime(2024, 1, 5)
 
 
 def submeter(id, mi, record_date, reading, unit=1):

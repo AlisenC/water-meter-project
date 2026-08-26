@@ -10,7 +10,7 @@ from fastapi import APIRouter, File, Form, Header, HTTPException, UploadFile
 from pydantic import BaseModel
 from sqlalchemy import text
 
-from .database import SessionLocal, engine as sqlite_engine
+from .database import SessionLocal, engine as app_db_engine
 from .models import OracleProfile
 from .oracle_connection import is_connected, get_connection
 from .units import to_units as _to_units
@@ -309,7 +309,7 @@ def oracle_sync(x_oracle_profile_id: int | None = Header(default=None)):
     if not connected:
         raise HTTPException(status_code=503, detail=f"Oracle not connected: {error}")
 
-    with sqlite_engine.connect() as conn:
+    with app_db_engine.connect() as conn:
         readings = [
             dict(r)
             for r in conn.execute(text("SELECT id, mi, reading, record_date, unit FROM readings"))
@@ -429,7 +429,7 @@ def oracle_embed_sync(
 
     provider = (x_api_provider or "anthropic").lower()
 
-    with sqlite_engine.connect() as conn:
+    with app_db_engine.connect() as conn:
         readings = [
             dict(r)
             for r in conn.execute(text("SELECT id, mi, reading, record_date, unit FROM readings ORDER BY id"))

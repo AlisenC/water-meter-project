@@ -3,7 +3,7 @@
 A full-stack water meter tracking and analysis app with AI-powered analysis.
 
 - **Frontend:** React 19 + Vite + Tailwind CSS
-- **Backend:** FastAPI + SQLite (primary store)
+- **Backend:** FastAPI + PostgreSQL (primary store)
 - **AI:** Anthropic Claude or OpenAI GPT-4o (your API key, never stored on server)
 
 ---
@@ -40,6 +40,18 @@ Chat with AI about your data using Claude or GPT-4o — natural language Q&A aga
 ### Prerequisites
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running
+- A PostgreSQL database (e.g. a managed instance like AWS RDS) and its connection string
+
+### Set up the database
+
+1. Copy `.env.example` to `.env` and set `DATABASE_URL` to your Postgres connection string (`postgresql+psycopg://user:password@host:5432/dbname`). `.env` is gitignored — never commit real credentials.
+2. Create the schema with Alembic:
+   ```bash
+   cd backend
+   pip install -r requirements.txt
+   alembic upgrade head
+   ```
+   This only needs to be run once per database, and again after pulling changes that add a new Alembic revision.
 
 ### Start the stack
 
@@ -50,7 +62,7 @@ docker compose up --build
 - Frontend: http://localhost:8080
 - Backend API: http://localhost:8500
 
-Data is persisted in a bind-mounted `./data` directory (mapped to `/app/data` in the backend container), so it survives container restarts and rebuilds.
+Readings, billing statements, and leak detection data live in Postgres. Imported PDF statements and Oracle wallet files are persisted in a bind-mounted `./data` directory (mapped to `/app/data` in the backend container), so they survive container restarts and rebuilds.
 
 ### Stop
 
@@ -64,13 +76,23 @@ docker compose down
 docker compose up --build
 ```
 
+### Running tests
+
+```bash
+cd backend
+pip install -r requirements-dev.txt
+pytest
+```
+
+Requires `TEST_DATABASE_URL` in `.env` (or exported) pointing at a dedicated Postgres database — see `.env.example`. It must hold no real data: every test run truncates all app tables in it. It needs its schema created the same way as the main database (`alembic upgrade head` against it) before the first run.
+
 ### Reset all data
 
 ```bash
 docker compose down -v
 ```
 
-> The `-v` flag only removes the `ollama_data` volume (the pulled local model), not your app data — since that lives in the bind-mounted `./data` folder, not a Docker volume. To wipe the SQLite database, delete the `./data` directory yourself.
+> The `-v` flag only removes the `ollama_data` volume (the pulled local model). To reset app data: truncate the tables in Postgres (or drop and re-run `alembic upgrade head`) for readings/statements/leak sessions, and delete the `./data` directory yourself for imported PDFs and Oracle wallets.
 
 ---
 
@@ -160,9 +182,10 @@ Click **Archive Session** and confirm. The active workspace resets to empty for 
 ```
 water-meter/
 ├── backend/
-│   ├── main.py              # FastAPI app, routes, SQLite ORM
+│   ├── main.py              # FastAPI app, routes
 │   ├── models.py            # SQLAlchemy models
-│   ├── database.py          # DB engine and session
+│   ├── database.py          # DB engine and session (reads DATABASE_URL)
+│   ├── alembic/              # Schema migrations
 │   ├── ai_agent.py          # AI chat and PDF bill extraction
 │   ├── csv_parser.py        # CSV import with format detection
 │   ├── units.py             # Shared gallons↔units-of-water conversion
@@ -225,7 +248,7 @@ water-meter/
 | POST | `/ai/ask` | Chat with AI about your data |
 | GET | `/oracle/status` | Oracle connection health check |
 | POST | `/oracle/init` | Create Oracle tables |
-| POST | `/oracle/sync` | Sync SQLite → Oracle |
+| POST | `/oracle/sync` | Sync Postgres → Oracle |
 | POST | `/oracle/embed-sync` | Generate and store embeddings |
 | POST | `/oracle/vector-search` | Semantic similarity search |
 | POST | `/oracle/ask` | NL2SQL query against Oracle |

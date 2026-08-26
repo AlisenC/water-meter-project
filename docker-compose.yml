@@ -7,7 +7,7 @@ services:
     volumes:
       - ./data:/app/data
     environment:
-      - DATABASE_URL=sqlite:////app/data/water_meter.db
+      - DATABASE_URL=${DATABASE_URL}
       - DATA_DIR=/app/data
       - OLLAMA_BASE_URL=http://ollama:11434
       - OLLAMA_MODEL=llama3.1

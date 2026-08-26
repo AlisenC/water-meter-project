@@ -6,9 +6,8 @@ import json
 import re
 from io import BytesIO
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import text
-from .database import SessionLocal, engine
-from .models import Base, Reading, BillingStatement
+from .database import SessionLocal
+from .models import Reading, BillingStatement
 from datetime import datetime, date as date_type
 from pydantic import BaseModel
 from typing import Optional
@@ -66,56 +65,6 @@ def _household_sum_units(readings_by_mi: dict, billing_month: int, billing_year:
     return round(total, 3) if has_data else None
 
 
-def _migrate_billing_statements_needs_review_column():
-    """
-    Additive migration: adds needs_review (True for a stub statement created when a PDF
-    import failed automatic extraction — see _create_stub_statement). A no-op if the
-    table doesn't exist yet or the column is already present.
-    """
-    with engine.connect() as conn:
-        cols = {row[1] for row in conn.execute(text("PRAGMA table_info(billing_statements)"))}
-        if not cols or "needs_review" in cols:
-            return  # no table yet (create_all will make one), or already migrated
-        conn.execute(text("ALTER TABLE billing_statements ADD COLUMN needs_review BOOLEAN NOT NULL DEFAULT 0"))
-        conn.commit()
-
-
-def _migrate_billing_statements_nullable_period():
-    """
-    billing_month/billing_year used to be NOT NULL. A failed-import stub (see
-    _create_stub_statement) has no known billing period until the user fills it in
-    manually, so they're now nullable. SQLite has no ALTER COLUMN, so an existing NOT
-    NULL table is migrated by recreating it (preserving every existing column and row);
-    a no-op if the table doesn't exist yet or is already nullable.
-    """
-    with engine.connect() as conn:
-        cols = conn.execute(text("PRAGMA table_info(billing_statements)")).fetchall()
-        if not cols:
-            return  # no table yet — create_all below will make one with the right nullability
-
-        by_name = {c[1]: c for c in cols}
-        if "billing_month" not in by_name or by_name["billing_month"][3] == 0:
-            return  # already nullable
-
-        col_defs = []
-        for _cid, name, ctype, notnull, _dflt, pk in cols:
-            relax = name in ("billing_month", "billing_year")
-            suffix = " PRIMARY KEY" if pk else (" NOT NULL" if notnull and not relax else "")
-            col_defs.append(f'"{name}" {ctype}{suffix}')
-        col_names = ", ".join(f'"{c[1]}"' for c in cols)
-
-        conn.execute(text(f"CREATE TABLE billing_statements_new ({', '.join(col_defs)})"))
-        conn.execute(text(f"INSERT INTO billing_statements_new SELECT {col_names} FROM billing_statements"))
-        conn.execute(text("DROP TABLE billing_statements"))
-        conn.execute(text("ALTER TABLE billing_statements_new RENAME TO billing_statements"))
-        conn.commit()
-
-
-_migrate_billing_statements_needs_review_column()
-_migrate_billing_statements_nullable_period()
-
-# Create tables if they don't exist
-Base.metadata.create_all(bind=engine)
 app = FastAPI()
 
 class ReadingCreate(BaseModel):

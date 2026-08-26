@@ -1,11 +1,10 @@
 # Water Meter Dashboard
 
-A full-stack water meter tracking and analysis app with AI-powered analysis and optional Oracle 26ai integration.
+A full-stack water meter tracking and analysis app with AI-powered analysis.
 
 - **Frontend:** React 19 + Vite + Tailwind CSS
 - **Backend:** FastAPI + SQLite (primary store)
 - **AI:** Anthropic Claude or OpenAI GPT-4o (your API key, never stored on server)
-- **Optional:** Oracle AI Database 26ai — vector search, NL2SQL, mirrored data store
 
 ---
 
@@ -16,7 +15,7 @@ A full-stack water meter tracking and analysis app with AI-powered analysis and 
 - Import meter readings from CSV files (multi-file, format auto-detection, preview step)
 - Dashboard with consumption, cost, and spike summary cards
 - Usage charts and anomaly/spike detection across all meters
-- Household sum verification against billing statements
+- Household sum verification against billing statements, plus a "Money Lost to Unaccounted Water" chart showing the $ gap between billed and summed household consumption
 - Manual reading entry, search/filter, and CSV export
 
 ### Daily Leak Detection
@@ -32,20 +31,7 @@ A short-term workspace for spotting leaks between bills, kept completely separat
 See [Using Daily Leak Detection](#using-daily-leak-detection) below for the full workflow.
 
 ### AI Assistant
-Three tabs in one section — no Oracle required for Chat:
-
-| Tab | What it does |
-|-----|-------------|
-| **Chat** | Natural language Q&A against your data using Claude or GPT-4o |
-| **Ask Oracle** | NL2SQL — type a question, get a generated SQL query run against Oracle and an AI explanation |
-| **Semantic Search** | Find meter readings similar to a text query using Oracle vector embeddings |
-
-### Oracle 26ai (optional)
-Oracle is fully config-ready — the app works without it. When connected, it enables Ask Oracle and Semantic Search.
-
-- Connect by entering credentials in **Settings → Oracle 26ai Connection** (stored in browser localStorage, sent as request headers — never persisted on server)
-- Or set server-side env vars for production deployments (see below)
-- Once connected: initialize tables, sync SQLite data to Oracle, generate embeddings
+Chat with AI about your data using Claude or GPT-4o — natural language Q&A against your readings, bills, and leak detection sessions.
 
 ---
 
@@ -61,10 +47,10 @@ Oracle is fully config-ready — the app works without it. When connected, it en
 docker compose up --build
 ```
 
-- Frontend: http://localhost
-- Backend API: http://localhost:8000
+- Frontend: http://localhost:8080
+- Backend API: http://localhost:8500
 
-Data is persisted in a Docker volume (`water_meter_data`) so it survives container restarts.
+Data is persisted in a bind-mounted `./data` directory (mapped to `/app/data` in the backend container), so it survives container restarts and rebuilds.
 
 ### Stop
 
@@ -84,45 +70,7 @@ docker compose up --build
 docker compose down -v
 ```
 
-> The `-v` flag removes the volume, wiping the SQLite database.
-
-### Oracle env vars in Docker
-
-Add to the `backend` service in `docker-compose.yml`:
-
-```yaml
-environment:
-  - DATABASE_URL=sqlite:////app/data/water_meter.db
-  - ALLOWED_ORIGINS=http://localhost
-  - ORACLE_DSN=hostname:1521/service_name
-  - ORACLE_USER=wm_user
-  - ORACLE_PASSWORD=your_password
-```
-
----
-
-## Local development (without Docker)
-
-**Backend**
-
-```bash
-cd backend
-python -m venv venv
-venv\Scripts\activate        # Windows
-# venv/bin/activate          # macOS/Linux
-pip install -r requirements.txt
-uvicorn backend.main:app --reload
-```
-
-**Frontend**
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-Frontend: http://localhost:5173 · Backend: http://localhost:8000
+> The `-v` flag only removes the `ollama_data` volume (the pulled local model), not your app data — since that lives in the bind-mounted `./data` folder, not a Docker volume. To wipe the SQLite database, delete the `./data` directory yourself.
 
 ---
 
@@ -153,37 +101,10 @@ model (`llama3.1`) on first run — no separate install needed, though the first
 downloads several GB and takes a while. It runs CPU-only unless you add GPU passthrough
 to the `ollama` service yourself.
 
-For non-Docker local dev, install Ollama, run `ollama serve`, then `ollama pull llama3.1`
-— the backend's built-in default (`http://localhost:11434`) already points at it.
-
 | Env var | Default | Where |
 |---------|---------|-------|
-| `OLLAMA_BASE_URL` | `http://localhost:11434` (backend default); `http://ollama:11434` (docker-compose) | Where the backend looks for Ollama |
+| `OLLAMA_BASE_URL` | `http://ollama:11434` (docker-compose) | Where the backend looks for Ollama |
 | `OLLAMA_MODEL` | `llama3.1` | Model used for extraction, and what `ollama-pull` fetches in Docker |
-
-### Oracle 26ai (optional)
-
-**Option A — Browser UI (recommended for development)**
-
-Go to **Settings → Oracle 26ai Connection**, enter your DSN, username, and password, then click **Save & Test Connection**. Credentials are stored in localStorage and sent as `X-Oracle-*` request headers.
-
-**Option B — Server-side env vars (recommended for production)**
-
-Set these on the host running the backend before starting:
-
-```bash
-ORACLE_DSN=hostname:1521/service_name
-ORACLE_USER=wm_user
-ORACLE_PASSWORD=your_password
-```
-
-Both options can coexist — UI credentials take priority over env vars when provided.
-
-**First-time Oracle setup (after connecting)**
-
-1. **Initialize Tables** — creates `wm_readings`, `wm_billing_statements`, `wm_readings_vectors` in Oracle (safe to run multiple times)
-2. **Sync Data** — upserts all SQLite readings and bills into Oracle using MERGE
-3. **Generate Embeddings** — generates AI embeddings for each reading and stores them in Oracle `VECTOR` columns (required for Semantic Search)
 
 ---
 
@@ -258,12 +179,16 @@ water-meter/
 │           ├── Sidebar.jsx                # Collapsible dark sidebar
 │           ├── DashboardSummary.jsx       # Stat cards + spike list
 │           ├── UsageCharts.jsx            # Consumption charts
+│           ├── MoneyLostChart.jsx         # $ gap between billed and summed household usage
 │           ├── DataQuality.jsx            # Anomaly details
-│           ├── BillingImport.jsx          # PDF import + billing table
+│           ├── StatementUpload.jsx        # PDF bill import
+│           ├── StatementsList.jsx         # Billing statements table
 │           ├── ImportWizard.jsx           # CSV import wizard
 │           ├── ReadingTable.jsx           # Readings table with search + export
 │           ├── LeakDetectionTool.jsx      # Daily Leak Detection tab (active/archived sessions)
 │           ├── LeakSessionView.jsx        # Leak session comparison chart + table
+│           ├── LeakDifferenceBarChart.jsx # Per-day submeter-vs-main-meter difference chart
+│           ├── LeakRawDataTable.jsx       # Raw submeter / main meter reading tables
 │           ├── LeakCsvImport.jsx          # Single-file CSV preview → confirm widget
 │           ├── AIAssistant.jsx            # Chat / Ask Oracle / Semantic Search tabs
 │           ├── ApiKeySettings.jsx         # AI provider key management
@@ -305,4 +230,4 @@ water-meter/
 | POST | `/oracle/vector-search` | Semantic similarity search |
 | POST | `/oracle/ask` | NL2SQL query against Oracle |
 
-All `/oracle/*` endpoints accept optional `X-Oracle-Dsn`, `X-Oracle-User`, `X-Oracle-Password` headers. AI endpoints accept `X-Api-Key` and `X-Api-Provider`.
+AI endpoints accept `X-Api-Key` and `X-Api-Provider`.

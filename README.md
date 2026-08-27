@@ -44,14 +44,33 @@ Chat with AI about your data using Claude or GPT-4o — natural language Q&A aga
 
 ### Set up the database
 
-1. Copy `.env.example` to `.env` and set `DATABASE_URL` to your Postgres connection string (`postgresql+psycopg://user:password@host:5432/dbname`). `.env` is gitignored — never commit real credentials.
-2. Create the schema with Alembic:
+Recommended: one Postgres instance, a separate database per environment (prod, dev, test), each owned by its own role — so a misconfigured `DATABASE_URL` on a dev machine can't accidentally read or write real data. `PUBLIC`'s default `CONNECT` privilege on the prod database is revoked, so only the intended role can even open a connection to it.
+
+```sql
+-- One-time, run as the instance's admin/master user:
+CREATE ROLE dev_app LOGIN PASSWORD '<random>';
+GRANT dev_app TO <admin_user>;              -- RDS requires this before OWNER TO below
+CREATE DATABASE water_meter_dev OWNER dev_app;
+
+CREATE ROLE test_app LOGIN PASSWORD '<random>';
+GRANT test_app TO <admin_user>;
+CREATE DATABASE water_meter_test OWNER test_app;
+
+REVOKE CONNECT ON DATABASE water_meter FROM PUBLIC;
+GRANT CONNECT ON DATABASE water_meter TO <admin_user>;
+```
+
+Then:
+
+1. Copy `.env.example` to `.env`. Set `DATABASE_URL` to the `dev_app`/`water_meter_dev` connection string for local dev, and `TEST_DATABASE_URL` to `test_app`/`water_meter_test`. `.env` is gitignored — never commit real credentials.
+2. Create the schema with Alembic, once per database:
    ```bash
    cd backend
    pip install -r requirements.txt
    alembic upgrade head
    ```
-   This only needs to be run once per database, and again after pulling changes that add a new Alembic revision.
+   Re-run this after pulling changes that add a new Alembic revision, and again for any new database (test, a teammate's dev database, etc.).
+3. The real deployment's `DATABASE_URL` points at `water_meter` using its own role — not `dev_app`/`test_app`, which are deliberately unable to reach it.
 
 ### Start the stack
 

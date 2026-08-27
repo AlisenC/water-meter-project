@@ -3,9 +3,12 @@ frontend/node_modules/
 frontend/dist/
 frontend/.env
 
+# Env files (contain real credentials, e.g. DATABASE_URL)
+.env
+
 # Python / backend
 backend/venv/
-backend/__pycache__/
+**/__pycache__/
 backend/*.pyc
 backend/water_meter.db
 

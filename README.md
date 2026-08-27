@@ -3,7 +3,7 @@
 A full-stack water meter tracking and analysis app with AI-powered analysis.
 
 - **Frontend:** React 19 + Vite + Tailwind CSS
-- **Backend:** FastAPI + SQLite (primary store)
+- **Backend:** FastAPI + PostgreSQL (primary store)
 - **AI:** Anthropic Claude or OpenAI GPT-4o (your API key, never stored on server)
 
 ---
@@ -40,6 +40,37 @@ Chat with AI about your data using Claude or GPT-4o — natural language Q&A aga
 ### Prerequisites
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) installed and running
+- A PostgreSQL database (e.g. a managed instance like AWS RDS) and its connection string
+
+### Set up the database
+
+Recommended: one Postgres instance, a separate database per environment (prod, dev, test), each owned by its own role — so a misconfigured `DATABASE_URL` on a dev machine can't accidentally read or write real data. `PUBLIC`'s default `CONNECT` privilege on the prod database is revoked, so only the intended role can even open a connection to it.
+
+```sql
+-- One-time, run as the instance's admin/master user:
+CREATE ROLE dev_app LOGIN PASSWORD '<random>';
+GRANT dev_app TO <admin_user>;              -- RDS requires this before OWNER TO below
+CREATE DATABASE water_meter_dev OWNER dev_app;
+
+CREATE ROLE test_app LOGIN PASSWORD '<random>';
+GRANT test_app TO <admin_user>;
+CREATE DATABASE water_meter_test OWNER test_app;
+
+REVOKE CONNECT ON DATABASE water_meter FROM PUBLIC;
+GRANT CONNECT ON DATABASE water_meter TO <admin_user>;
+```
+
+Then:
+
+1. Copy `.env.example` to `.env`. Set `DATABASE_URL` to the `dev_app`/`water_meter_dev` connection string for local dev, and `TEST_DATABASE_URL` to `test_app`/`water_meter_test`. `.env` is gitignored — never commit real credentials.
+2. Create the schema with Alembic, once per database:
+   ```bash
+   cd backend
+   pip install -r requirements.txt
+   alembic upgrade head
+   ```
+   Re-run this after pulling changes that add a new Alembic revision, and again for any new database (test, a teammate's dev database, etc.).
+3. The real deployment's `DATABASE_URL` points at `water_meter` using its own role — not `dev_app`/`test_app`, which are deliberately unable to reach it.
 
 ### Start the stack
 
@@ -50,7 +81,7 @@ docker compose up --build
 - Frontend: http://localhost:8080
 - Backend API: http://localhost:8500
 
-Data is persisted in a bind-mounted `./data` directory (mapped to `/app/data` in the backend container), so it survives container restarts and rebuilds.
+Readings, billing statements, and leak detection data live in Postgres. Imported PDF statements and Oracle wallet files are persisted in a bind-mounted `./data` directory (mapped to `/app/data` in the backend container), so they survive container restarts and rebuilds.
 
 ### Stop
 
@@ -64,13 +95,23 @@ docker compose down
 docker compose up --build
 ```
 
+### Running tests
+
+```bash
+cd backend
+pip install -r requirements-dev.txt
+pytest
+```
+
+Requires `TEST_DATABASE_URL` in `.env` (or exported) pointing at a dedicated Postgres database — see `.env.example`. It must hold no real data: every test run truncates all app tables in it. It needs its schema created the same way as the main database (`alembic upgrade head` against it) before the first run.
+
 ### Reset all data
 
 ```bash
 docker compose down -v
 ```
 
-> The `-v` flag only removes the `ollama_data` volume (the pulled local model), not your app data — since that lives in the bind-mounted `./data` folder, not a Docker volume. To wipe the SQLite database, delete the `./data` directory yourself.
+> The `-v` flag only removes the `ollama_data` volume (the pulled local model). To reset app data: truncate the tables in Postgres (or drop and re-run `alembic upgrade head`) for readings/statements/leak sessions, and delete the `./data` directory yourself for imported PDFs and Oracle wallets.
 
 ---
 
@@ -160,9 +201,10 @@ Click **Archive Session** and confirm. The active workspace resets to empty for 
 ```
 water-meter/
 ├── backend/
-│   ├── main.py              # FastAPI app, routes, SQLite ORM
+│   ├── main.py              # FastAPI app, routes
 │   ├── models.py            # SQLAlchemy models
-│   ├── database.py          # DB engine and session
+│   ├── database.py          # DB engine and session (reads DATABASE_URL)
+│   ├── alembic/              # Schema migrations
 │   ├── ai_agent.py          # AI chat and PDF bill extraction
 │   ├── csv_parser.py        # CSV import with format detection
 │   ├── units.py             # Shared gallons↔units-of-water conversion
@@ -225,7 +267,7 @@ water-meter/
 | POST | `/ai/ask` | Chat with AI about your data |
 | GET | `/oracle/status` | Oracle connection health check |
 | POST | `/oracle/init` | Create Oracle tables |
-| POST | `/oracle/sync` | Sync SQLite → Oracle |
+| POST | `/oracle/sync` | Sync Postgres → Oracle |
 | POST | `/oracle/embed-sync` | Generate and store embeddings |
 | POST | `/oracle/vector-search` | Semantic similarity search |
 | POST | `/oracle/ask` | NL2SQL query against Oracle |

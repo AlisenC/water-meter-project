@@ -35,7 +35,7 @@ def _ask_anthropic(question: str, api_key: str) -> dict:
         model="claude-opus-4-7",
         max_tokens=1024,
         system=(
-            "You are a SQL expert working with a SQLite water meter database. "
+            "You are a SQL expert working with a PostgreSQL water meter database. "
             "Write only SELECT queries — never INSERT, UPDATE, DELETE, or DROP. "
             "Return ONLY the raw SQL query with no markdown, no code fences, and no explanation."
         ),
@@ -89,7 +89,7 @@ def _ask_openai(question: str, api_key: str) -> dict:
             {
                 "role": "system",
                 "content": (
-                    "You are a SQL expert working with a SQLite water meter database. "
+                    "You are a SQL expert working with a PostgreSQL water meter database. "
                     "Write only SELECT queries — never INSERT, UPDATE, DELETE, or DROP. "
                     "Return ONLY the raw SQL query with no markdown, no code fences, and no explanation."
                 ),

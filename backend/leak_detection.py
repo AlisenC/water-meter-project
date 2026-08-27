@@ -12,24 +12,13 @@ from .units import to_units
 
 router = APIRouter()
 
-# SQLite has a hard cap on bound parameters per statement (historically 999);
-# batching keeps a single bulk delete under that regardless of how many ids
-# are selected, while still running as one request/transaction instead of one
-# HTTP request per row (which is what was overwhelming SQLite's single-writer
-# lock on large selections).
-DELETE_CHUNK_SIZE = 500
-
 
 class BulkDeleteRequest(BaseModel):
     ids: list[int]
 
 
 def _bulk_delete(db, model, ids: list[int]) -> int:
-    deleted = 0
-    for i in range(0, len(ids), DELETE_CHUNK_SIZE):
-        chunk = ids[i:i + DELETE_CHUNK_SIZE]
-        deleted += db.query(model).filter(model.id.in_(chunk)).delete(synchronize_session=False)
-    return deleted
+    return db.query(model).filter(model.id.in_(ids)).delete(synchronize_session=False)
 
 # Purely for float noise around zero — not a business tolerance like billing's
 # DISCREPANCY_TOLERANCE_UNITS. Any real excess flags as a potential leak.

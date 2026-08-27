@@ -8,8 +8,6 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy backend source into /app/backend/ so `uvicorn backend.main:app` resolves correctly
 COPY . ./backend/
 
-ENV DATABASE_URL=sqlite:////app/data/water_meter.db
-
 RUN mkdir -p /app/data
 
 EXPOSE 8000

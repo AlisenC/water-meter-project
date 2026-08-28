@@ -257,6 +257,7 @@ water-meter/
 | GET | `/anomalies` | Spike detection: flags a household whose current daily usage rate is 2.5x+ its rolling 90-day baseline |
 | GET | `/billing-statements` | List imported bills |
 | POST | `/import-billing` | Upload and AI-extract a PDF bill (cloud key if set, else local Ollama) |
+| POST | `/billing-statements` | Add a blank statement for manual entry |
 | DELETE | `/billing-statements/{id}` | Delete a bill |
 | GET | `/billing-verify` | Household sum vs bill verification |
 | POST | `/import-csv/preview` | Preview a household meter reading CSV import, including duplicate/conflict counts |

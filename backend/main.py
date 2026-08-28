@@ -721,12 +721,12 @@ def _extract_billing_data(pdf_bytes: bytes, filename: str, x_api_key: str | None
     }
 
 
-def _create_stub_statement(filename: str, reason: str) -> dict:
-    """Fallback for a PDF that failed automatic extraction (unreadable/encrypted PDF,
-    no text layer, AI provider error, non-JSON response, or no billing period found):
-    rather than discarding the upload, create a stub statement with needs_review=True,
-    so the user can complete it through the normal editing UI (StatementsList) instead
-    of losing the upload or having to retry/recreate it."""
+def _create_stub_statement(filename: str | None = None, reason: str | None = None) -> dict:
+    """Create a blank, needs_review statement for the user to fill in through the
+    normal editing UI (StatementsList) — either as a fallback for a PDF that failed
+    automatic extraction (unreadable/encrypted PDF, no text layer, AI provider error,
+    non-JSON response, or no billing period found), so the upload isn't discarded
+    outright, or as a manually-added blank row with no upload at all."""
     db = SessionLocal()
     stmt = BillingStatement(
         billing_month=None,
@@ -825,6 +825,12 @@ async def import_billing(
         "needs_review": stmt.needs_review,
         "low_confidence_fields": low_confidence_fields,
     }
+
+
+# Manually add a blank billing statement for the user to fill in themselves
+@app.post("/billing-statements")
+async def create_blank_billing_statement():
+    return _create_stub_statement()
 
 
 # List all billing statements

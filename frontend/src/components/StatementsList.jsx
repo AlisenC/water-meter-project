@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { toast } from "react-hot-toast";
 import { api } from "../api";
-import { Download } from "lucide-react";
+import { Download, Plus } from "lucide-react";
 import { monthLabel, exportCSV, DISCREPANCY_TOLERANCE_UNITS } from "../utils/billing";
 
 function periodLabel(s) {
@@ -58,7 +58,7 @@ function PeriodCell({ s, editing, onStartEdit, onStopEdit, onDateFieldBlur }) {
         </button>
         {s.needs_review && (
           <span
-            title="Automatic extraction failed for this PDF — the fields on this row are blank and need to be filled in manually."
+            title="This statement's fields are blank and need to be filled in manually — either automatic extraction failed for the imported PDF, or the row was added blank."
             className="text-[10px] font-semibold uppercase tracking-wide text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded"
           >
             Needs Review
@@ -98,6 +98,7 @@ function PeriodCell({ s, editing, onStartEdit, onStopEdit, onDateFieldBlur }) {
 
 export default function StatementsList({ billingStatements, verificationData, onDelete, onUpdate }) {
   const [editingPeriodId, setEditingPeriodId] = useState(null);
+  const [creatingBlank, setCreatingBlank] = useState(false);
 
   // Chronological order, oldest → newest. Needs-review stubs have no known period yet,
   // so they sort last rather than producing NaN comparisons.
@@ -107,6 +108,19 @@ export default function StatementsList({ billingStatements, verificationData, on
     if (aYear !== bYear) return aYear - bYear;
     return (a.billing_month ?? Infinity) - (b.billing_month ?? Infinity);
   });
+
+  async function handleCreateBlank() {
+    setCreatingBlank(true);
+    try {
+      await api.post("/billing-statements");
+      toast.success("Blank statement added — fill in the fields below.");
+      onUpdate();
+    } catch (err) {
+      toast.error("Couldn't add statement: " + (err.response?.data?.detail ?? err.message));
+    } finally {
+      setCreatingBlank(false);
+    }
+  }
 
   async function handleDelete(id) {
     if (!window.confirm("Delete this billing statement?")) return;
@@ -149,25 +163,34 @@ export default function StatementsList({ billingStatements, verificationData, on
     <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
       <div className="flex items-center justify-between px-5 py-3 bg-gray-50 border-b border-gray-200">
         <h3 className="text-sm font-semibold text-gray-700">Bill Statements ({sorted.length})</h3>
-        <button
-          onClick={() =>
-            exportCSV(
-              sorted.map((s) => ({
-                period: periodLabel(s),
-                units_consumed: s.total_units_consumed,
-                total_cost: s.total_cost,
-                cost_per_unit: s.cost_per_unit ?? "",
-                file: s.source_filename ?? "",
-              })),
-              "billing-statements.csv"
-            )
-          }
-          disabled={sorted.length === 0}
-          className="flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-800 border border-gray-200 hover:border-gray-300 px-2.5 py-1.5 rounded-lg disabled:opacity-40 transition-colors"
-        >
-          <Download size={12} />
-          Export CSV
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleCreateBlank}
+            disabled={creatingBlank}
+            className="flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-800 border border-gray-200 hover:border-gray-300 px-2.5 py-1.5 rounded-lg disabled:opacity-40 transition-colors"
+          >
+            <Plus size={12} />
+            New Statement
+          </button>
+          <button
+            onClick={() =>
+              exportCSV(
+                sorted.map((s) => ({
+                  period: periodLabel(s),
+                  units_consumed: s.total_units_consumed,
+                  total_cost: s.total_cost,
+                  cost_per_unit: s.cost_per_unit ?? "",
+                })),
+                "billing-statements.csv"
+              )
+            }
+            disabled={sorted.length === 0}
+            className="flex items-center gap-1.5 text-xs font-medium text-gray-500 hover:text-gray-800 border border-gray-200 hover:border-gray-300 px-2.5 py-1.5 rounded-lg disabled:opacity-40 transition-colors"
+          >
+            <Download size={12} />
+            Export CSV
+          </button>
+        </div>
       </div>
 
       {sorted.length === 0 ? (
@@ -184,7 +207,6 @@ export default function StatementsList({ billingStatements, verificationData, on
                 <th className="px-3 py-2.5 text-xs font-semibold uppercase tracking-wider">Household Sum</th>
                 <th className="px-3 py-2.5 text-xs font-semibold uppercase tracking-wider">Discrepancy</th>
                 <th className="px-3 py-2.5 text-xs font-semibold uppercase tracking-wider">Money Lost</th>
-                <th className="px-3 py-2.5 text-xs font-semibold uppercase tracking-wider">File</th>
                 <th className="px-3 py-2.5" />
               </tr>
             </thead>
@@ -269,9 +291,6 @@ export default function StatementsList({ billingStatements, verificationData, on
                       ) : (
                         <span className="text-xs">no data</span>
                       )}
-                    </td>
-                    <td className="px-3 py-3 text-xs truncate max-w-32">
-                      <span className="text-gray-400">{s.source_filename ?? "—"}</span>
                     </td>
                     <td className="px-3 py-3 text-right">
                       <button

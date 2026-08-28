@@ -1,9 +1,12 @@
-from sqlalchemy import Column, Integer, Float, String, DateTime, ForeignKey, Boolean
+from sqlalchemy import Column, Integer, Float, String, DateTime, ForeignKey, Boolean, UniqueConstraint
 from datetime import datetime
 from .database import Base
 
 class Reading(Base):
     __tablename__ = "readings"
+    __table_args__ = (
+        UniqueConstraint("mi", "record_date", name="uq_readings_mi_record_date"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     mi = Column(String)

@@ -11,6 +11,7 @@ from .models import Reading, BillingStatement
 from datetime import datetime, date as date_type
 from pydantic import BaseModel
 from typing import Optional
+from sqlalchemy.exc import IntegrityError
 from collections import defaultdict
 from .ai_agent import router as ai_router
 from .oracle_ai import router as oracle_router
@@ -117,7 +118,12 @@ async def add_reading(data: ReadingCreate):
     )
 
     db.add(new_reading)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        db.close()
+        raise HTTPException(status_code=409, detail="A reading for this meter at this exact timestamp already exists.")
     db.refresh(new_reading)
     db.close()
 
@@ -132,24 +138,51 @@ async def get_readings():
     return readings
 
 
+class ConflictRow(BaseModel):
+    row_num: int
+    filename: str
+    mi: str
+    record_date: str
+    existing_id: Optional[int]  # None for an in-batch conflict never yet written to the DB
+    existing_reading: float
+    existing_unit: int
+    new_reading: float
+    new_unit: int
+
+
+class ConflictResolution(BaseModel):
+    id: int
+    reading: float
+    unit: int
+
+
+class ResolveConflictsRequest(BaseModel):
+    resolutions: list[ConflictResolution]
+
+
 class FilePreview(BaseModel):
     filename: str
     detected_format: str
     total_rows: int
     valid_rows: int
     error_rows: int
+    duplicate_rows: int
+    conflict_rows: int
     rows_after_filter: int
     households_found: list[str]
     households_after_filter: list[str]
     date_min: Optional[str]
     date_max: Optional[str]
     errors: list[dict]
+    conflicts: list[ConflictRow]
 
 
 class ImportPreviewResponse(BaseModel):
     files: list[FilePreview]
     total_rows_to_import: int
     total_errors: int
+    total_duplicates: int
+    total_conflicts: int
     all_households: list[str]
 
 
@@ -160,6 +193,28 @@ def _build_existing_units(db) -> dict[str, int]:
         if mi not in result:
             result[mi] = unit
     return result
+
+
+def _build_existing_reading_keys(db) -> dict[tuple[str, date_type], dict]:
+    rows = db.query(Reading.id, Reading.mi, Reading.record_date, Reading.reading, Reading.unit).all()
+    result = {}
+    for id_, mi, record_date, reading, unit in rows:
+        result[(mi, record_date.date())] = {"id": id_, "reading": reading, "unit": unit}
+    return result
+
+
+def _serialize_conflict_row(row: dict, filename: str) -> ConflictRow:
+    return ConflictRow(
+        row_num=row["row_num"],
+        filename=filename,
+        mi=row["mi"],
+        record_date=row["record_date"].isoformat(),
+        existing_id=row["existing_id"],
+        existing_reading=row["existing_reading"],
+        existing_unit=row["existing_unit"],
+        new_reading=row["reading"],
+        new_unit=row["unit"],
+    )
 
 
 def _parse_date_form(value: Optional[str]) -> Optional[date_type]:
@@ -175,6 +230,7 @@ def _build_file_preview(
     file_bytes: bytes,
     filename: str,
     existing_units: dict[str, int],
+    existing_keys: dict[tuple[str, date_type], dict],
     date_start: Optional[date_type],
     date_end: Optional[date_type],
     exclude_households: list[str],
@@ -191,15 +247,21 @@ def _build_file_preview(
             total_rows=0,
             valid_rows=0,
             error_rows=1,
+            duplicate_rows=0,
+            conflict_rows=0,
             rows_after_filter=0,
             households_found=[],
             households_after_filter=[],
             date_min=None,
             date_max=None,
             errors=[{"row_num": 0, "reason": "format_error", "raw_value": str(e), "filename": filename}],
+            conflicts=[],
         )
 
-    included, _ = csv_parser.apply_filters(valid_rows, date_start, date_end, exclude_households)
+    included, excluded = csv_parser.apply_filters(valid_rows, date_start, date_end, exclude_households, existing_keys)
+
+    duplicate_count = sum(1 for r in excluded if r["filter_reason"] == "duplicate")
+    conflicts = [_serialize_conflict_row(r, filename) for r in excluded if r["filter_reason"] == "conflict"]
 
     households_found = sorted({r["mi"] for r in valid_rows})
     households_after = sorted({r["mi"] for r in included})
@@ -213,12 +275,15 @@ def _build_file_preview(
         total_rows=len(valid_rows) + len(error_rows),
         valid_rows=len(valid_rows),
         error_rows=len(error_rows),
+        duplicate_rows=duplicate_count,
+        conflict_rows=len(conflicts),
         rows_after_filter=len(included),
         households_found=households_found,
         households_after_filter=households_after,
         date_min=date_min,
         date_max=date_max,
         errors=error_rows,
+        conflicts=conflicts,
     )
 
 
@@ -232,6 +297,7 @@ async def import_csv_preview(
 ) -> ImportPreviewResponse:
     db = SessionLocal()
     existing_units = _build_existing_units(db)
+    existing_keys = _build_existing_reading_keys(db)
     db.close()
 
     ds = _parse_date_form(date_start)
@@ -242,7 +308,7 @@ async def import_csv_preview(
     file_previews = []
     for upload in files:
         file_bytes = await upload.read()
-        fp = _build_file_preview(file_bytes, upload.filename, existing_units, ds, de, exclusions, override)
+        fp = _build_file_preview(file_bytes, upload.filename, existing_units, existing_keys, ds, de, exclusions, override)
         file_previews.append(fp)
 
     all_households = sorted({h for fp in file_previews for h in fp.households_after_filter})
@@ -250,6 +316,8 @@ async def import_csv_preview(
         files=file_previews,
         total_rows_to_import=sum(fp.rows_after_filter for fp in file_previews),
         total_errors=sum(fp.error_rows for fp in file_previews),
+        total_duplicates=sum(fp.duplicate_rows for fp in file_previews),
+        total_conflicts=sum(fp.conflict_rows for fp in file_previews),
         all_households=all_households,
     )
 
@@ -264,6 +332,7 @@ async def import_csv_confirm(
 ):
     db = SessionLocal()
     existing_units = _build_existing_units(db)
+    existing_keys = _build_existing_reading_keys(db)
 
     ds = _parse_date_form(date_start)
     de = _parse_date_form(date_end)
@@ -272,7 +341,10 @@ async def import_csv_confirm(
 
     total_inserted = 0
     total_skipped = 0
+    total_duplicates = 0
+    total_conflicts = 0
     all_errors: list[dict] = []
+    all_conflicts: list[ConflictRow] = []
     per_file = []
 
     for upload in files:
@@ -284,11 +356,13 @@ async def import_csv_confirm(
         except ValueError as e:
             err = {"row_num": 0, "reason": "format_error", "raw_value": str(e), "filename": upload.filename}
             all_errors.append(err)
-            per_file.append({"filename": upload.filename, "inserted": 0, "skipped": 0})
+            per_file.append({"filename": upload.filename, "inserted": 0, "skipped": 0, "duplicates": 0, "conflicts": 0})
             continue
 
-        included, _ = csv_parser.apply_filters(valid_rows, ds, de, exclusions)
-        skipped = len(valid_rows) - len(included) + len(error_rows)
+        included, excluded = csv_parser.apply_filters(valid_rows, ds, de, exclusions, existing_keys)
+        duplicate_rows = [r for r in excluded if r["filter_reason"] == "duplicate"]
+        conflict_rows = [_serialize_conflict_row(r, upload.filename) for r in excluded if r["filter_reason"] == "conflict"]
+        skipped = len(excluded) + len(error_rows)
 
         for row in included:
             db.add(Reading(
@@ -299,12 +373,25 @@ async def import_csv_confirm(
             ))
 
         all_errors.extend(error_rows)
+        all_conflicts.extend(conflict_rows)
         total_inserted += len(included)
         total_skipped += skipped
-        per_file.append({"filename": upload.filename, "inserted": len(included), "skipped": skipped})
+        total_duplicates += len(duplicate_rows)
+        total_conflicts += len(conflict_rows)
+        per_file.append({
+            "filename": upload.filename,
+            "inserted": len(included),
+            "skipped": skipped,
+            "duplicates": len(duplicate_rows),
+            "conflicts": len(conflict_rows),
+        })
 
     try:
         db.commit()
+    except IntegrityError:
+        db.rollback()
+        db.close()
+        raise HTTPException(status_code=409, detail="Import conflicts with a concurrent write to the readings table. Retry the import.")
     except Exception as e:
         db.rollback()
         db.close()
@@ -314,9 +401,34 @@ async def import_csv_confirm(
     return {
         "inserted": total_inserted,
         "skipped": total_skipped,
+        "duplicates": total_duplicates,
+        "conflicts": total_conflicts,
         "errors": all_errors,
+        "conflict_rows": all_conflicts,
         "per_file": per_file,
     }
+
+
+# Resolve one or more flagged CSV-import conflicts by overwriting the existing row's
+# reading/unit in place with the imported value — an alternative to manually finding
+# and deleting the offending row via DELETE /readings/{id}. Update-in-place (not
+# delete+reinsert) keeps the row's id and its unique-key match stable throughout.
+@app.post("/readings/resolve-conflicts")
+async def resolve_conflicts(data: ResolveConflictsRequest):
+    db = SessionLocal()
+    not_found = []
+    updated = 0
+    for r in data.resolutions:
+        result = db.query(Reading).filter(Reading.id == r.id).update(
+            {"reading": r.reading, "unit": r.unit}, synchronize_session=False
+        )
+        if result:
+            updated += 1
+        else:
+            not_found.append(r.id)
+    db.commit()
+    db.close()
+    return {"updated": updated, "not_found": not_found}
 
 
 # Delete a reading

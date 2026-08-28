@@ -12,7 +12,7 @@ A full-stack water meter tracking and analysis app with AI-powered analysis.
 
 ### Core
 - Import PDF water bills using AI extraction (Claude or GPT-4o)
-- Import meter readings from CSV files (multi-file, format auto-detection, preview step)
+- Import meter readings from CSV files (multi-file, format auto-detection, preview step, automatic duplicate/conflict detection against existing readings, with bulk conflict resolution)
 - Dashboard with consumption, cost, and spike summary cards
 - Usage charts and anomaly/spike detection across all meters
 - Household sum verification against billing statements, plus a "Money Lost to Unaccounted Water" chart showing the $ gap between billed and summed household consumption
@@ -71,6 +71,12 @@ Then:
    ```
    Re-run this after pulling changes that add a new Alembic revision, and again for any new database (test, a teammate's dev database, etc.).
 3. The real deployment's `DATABASE_URL` points at `water_meter` using its own role — not `dev_app`/`test_app`, which are deliberately unable to reach it.
+
+> `readings` has a unique constraint on `(mi, record_date)` (enforced at the DB level, not just by the CSV import UI). Upgrading a database that already has duplicate `(mi, record_date)` rows will fail that migration — check first:
+> ```sql
+> SELECT mi, record_date, COUNT(*) FROM readings GROUP BY mi, record_date HAVING COUNT(*) > 1;
+> ```
+> Resolve any hits before retrying `alembic upgrade head`.
 
 ### Start the stack
 
@@ -253,8 +259,9 @@ water-meter/
 | POST | `/import-billing` | Upload and AI-extract a PDF bill (cloud key if set, else local Ollama) |
 | DELETE | `/billing-statements/{id}` | Delete a bill |
 | GET | `/billing-verify` | Household sum vs bill verification |
-| POST | `/import-csv/preview` | Preview a household meter reading CSV import |
-| POST | `/import-csv/confirm` | Import a household meter reading CSV |
+| POST | `/import-csv/preview` | Preview a household meter reading CSV import, including duplicate/conflict counts |
+| POST | `/import-csv/confirm` | Import a household meter reading CSV — skips exact duplicates, flags value conflicts for manual review, never overwrites |
+| POST | `/readings/resolve-conflicts` | Bulk-apply imported values to existing rows flagged as conflicts by CSV import |
 | GET | `/leak/sessions` | List all daily leak detection sessions |
 | GET | `/leak/sessions/active` | Get (or create) the active leak detection session |
 | GET | `/leak/sessions/{id}/analysis` | Per-day main-meter-vs-submeter comparison and leak flags, plus SFPUC/EyeOnWater rule results for the main meter |

@@ -155,10 +155,24 @@ def apply_filters(
     date_start: date | None,
     date_end: date | None,
     exclude_households: list[str],
+    existing_keys: dict[tuple[str, date], dict] | None = None,
 ) -> tuple[list[dict], list[dict]]:
+    """Filter rows by date range/excluded households, then classify the rest against
+    existing_keys for duplicate/conflict detection.
+
+    existing_keys maps (mi, record_date) -> {"id", "reading", "unit"} for rows already
+    known — either already in the DB, or already accepted earlier in this same call. If
+    a dict is passed in, it is mutated in place as rows are accepted: this lets a caller
+    reuse the same dict across multiple apply_filters calls (e.g. one per uploaded file
+    in a single import batch) so a row that duplicates/conflicts with a row from an
+    earlier file in the same batch is caught too, not just rows that duplicate/conflict
+    with what's already in the DB. Rows added this way (not sourced from the DB) carry
+    "id": None, since nothing has actually been inserted yet.
+    """
     included = []
     excluded = []
     exclude_set = {h.strip() for h in exclude_households if h.strip()}
+    keys = existing_keys if existing_keys is not None else {}
 
     for row in rows:
         rd = row["record_date"]
@@ -171,7 +185,24 @@ def apply_filters(
         if row["mi"] in exclude_set:
             excluded.append({**row, "filter_reason": "excluded_household"})
             continue
+
+        key = (row["mi"], rd)
+        existing = keys.get(key)
+        if existing is not None:
+            if existing["reading"] == row["reading"] and existing["unit"] == row["unit"]:
+                excluded.append({**row, "filter_reason": "duplicate"})
+            else:
+                excluded.append({
+                    **row,
+                    "filter_reason": "conflict",
+                    "existing_id": existing["id"],
+                    "existing_reading": existing["reading"],
+                    "existing_unit": existing["unit"],
+                })
+            continue
+
         included.append(row)
+        keys[key] = {"id": None, "reading": row["reading"], "unit": row["unit"]}
 
     return included, excluded
 

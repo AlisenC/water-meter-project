@@ -42,8 +42,59 @@ function ErrorTable({ errors }) {
   );
 }
 
+function ConflictTable({ conflicts, selected, onToggle, onToggleAll }) {
+  if (!conflicts.length) return <p className="text-green-600 text-sm">No conflicts.</p>;
+  const resolvable = conflicts.filter((c) => c.existing_id != null);
+  const allResolvableSelected = resolvable.length > 0 && resolvable.every((c) => selected?.has(c.existing_id));
+
+  return (
+    <table className="w-full text-xs border-collapse mt-1">
+      <thead>
+        <tr className="text-left text-gray-500 border-b">
+          {onToggle && (
+            <th className="pr-2 py-1">
+              <input
+                type="checkbox"
+                checked={allResolvableSelected}
+                onChange={(e) => onToggleAll?.(e.target.checked)}
+                disabled={resolvable.length === 0}
+              />
+            </th>
+          )}
+          <th className="pr-3 py-1">Meter</th>
+          <th className="pr-3 py-1">Date</th>
+          <th className="pr-3 py-1">Existing</th>
+          <th className="py-1">Imported</th>
+        </tr>
+      </thead>
+      <tbody>
+        {conflicts.map((c, i) => (
+          <tr key={i} className="border-b last:border-0">
+            {onToggle && (
+              <td className="pr-2 py-1">
+                <input
+                  type="checkbox"
+                  checked={c.existing_id != null && !!selected?.has(c.existing_id)}
+                  onChange={() => onToggle(c)}
+                  disabled={c.existing_id == null}
+                  title={c.existing_id == null ? "Both values came from this same import batch — fix the source CSV instead" : undefined}
+                />
+              </td>
+            )}
+            <td className="pr-3 py-1 text-gray-700">{c.mi}</td>
+            <td className="pr-3 py-1 text-gray-500">{c.record_date}</td>
+            <td className="pr-3 py-1 font-mono text-gray-700">{c.existing_reading} (unit {c.existing_unit})</td>
+            <td className="py-1 font-mono text-amber-700">{c.new_reading} (unit {c.new_unit})</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
 function FileCard({ fp }) {
   const [open, setOpen] = useState(false);
+  const [conflictsOpen, setConflictsOpen] = useState(false);
   const formatBadge = fp.detected_format === "unknown" ? "Unknown" : `Format ${fp.detected_format}`;
 
   return (
@@ -59,6 +110,8 @@ function FileCard({ fp }) {
         <span>After filters: <strong className="text-green-700">{fp.rows_after_filter}</strong></span>
         <span>Valid: <strong>{fp.valid_rows}</strong></span>
         <span>Errors: <strong className={fp.error_rows ? "text-red-600" : ""}>{fp.error_rows}</strong></span>
+        <span>Duplicates: <strong>{fp.duplicate_rows}</strong></span>
+        <span>Conflicts: <strong className={fp.conflict_rows ? "text-amber-600" : ""}>{fp.conflict_rows}</strong></span>
         {fp.date_min && (
           <span className="col-span-2 text-xs text-gray-500">
             Date range: {fp.date_min} → {fp.date_max}
@@ -82,6 +135,17 @@ function FileCard({ fp }) {
           {open && <div className="mt-2"><ErrorTable errors={fp.errors} /></div>}
         </div>
       )}
+      {fp.conflicts.length > 0 && (
+        <div className="mt-1">
+          <button
+            onClick={() => setConflictsOpen((v) => !v)}
+            className="text-xs text-amber-600 underline"
+          >
+            {conflictsOpen ? "Hide" : "Show"} {fp.conflicts.length} conflict{fp.conflicts.length !== 1 ? "s" : ""}
+          </button>
+          {conflictsOpen && <div className="mt-2"><ConflictTable conflicts={fp.conflicts} /></div>}
+        </div>
+      )}
     </div>
   );
 }
@@ -100,6 +164,10 @@ export default function ImportWizard({ onImportSuccess, onClose }) {
   const [previewError, setPreviewError] = useState(null);
   const [resultData, setResultData] = useState(null);
   const [showAllErrors, setShowAllErrors] = useState(false);
+  const [selectedConflicts, setSelectedConflicts] = useState(new Set());
+  const [resolving, setResolving] = useState(false);
+  const [resolveError, setResolveError] = useState(null);
+  const [resolveResult, setResolveResult] = useState(null);
 
   function buildFormData() {
     const fd = new FormData();
@@ -149,7 +217,58 @@ export default function ImportWizard({ onImportSuccess, onClose }) {
     setPreviewError(null);
     setResultData(null);
     setShowAllErrors(false);
+    setSelectedConflicts(new Set());
+    setResolving(false);
+    setResolveError(null);
+    setResolveResult(null);
     if (fileInputRef.current) fileInputRef.current.value = "";
+  }
+
+  function toggleConflict(conflict) {
+    if (conflict.existing_id == null) return;
+    setSelectedConflicts((prev) => {
+      const next = new Set(prev);
+      if (next.has(conflict.existing_id)) next.delete(conflict.existing_id);
+      else next.add(conflict.existing_id);
+      return next;
+    });
+  }
+
+  function toggleAllConflicts(checked) {
+    const resolvableIds = (resultData?.conflict_rows ?? [])
+      .filter((c) => c.existing_id != null)
+      .map((c) => c.existing_id);
+    setSelectedConflicts(checked ? new Set(resolvableIds) : new Set());
+  }
+
+  async function handleResolveConflicts(idsToResolve) {
+    const conflictsById = new Map(
+      (resultData?.conflict_rows ?? [])
+        .filter((c) => c.existing_id != null)
+        .map((c) => [c.existing_id, c])
+    );
+    const resolutions = idsToResolve
+      .map((id) => conflictsById.get(id))
+      .filter(Boolean)
+      .map((c) => ({ id: c.existing_id, reading: c.new_reading, unit: c.new_unit }));
+    if (!resolutions.length) return;
+
+    setResolving(true);
+    setResolveError(null);
+    try {
+      const res = await api.post("/readings/resolve-conflicts", { resolutions });
+      setResolveResult(res.data);
+      const resolvedIds = new Set(resolutions.map((r) => r.id));
+      setResultData((prev) => {
+        const remaining = prev.conflict_rows.filter((c) => !resolvedIds.has(c.existing_id));
+        return { ...prev, conflict_rows: remaining, conflicts: remaining.length };
+      });
+      setSelectedConflicts(new Set());
+    } catch (err) {
+      setResolveError(err.response?.data?.detail ?? "Resolving conflicts failed.");
+    } finally {
+      setResolving(false);
+    }
   }
 
   const activeFilters = [];
@@ -285,6 +404,12 @@ export default function ImportWizard({ onImportSuccess, onClose }) {
                 {previewData.total_errors > 0 && (
                   <span className="text-red-600"><strong>{previewData.total_errors}</strong> error{previewData.total_errors !== 1 ? "s" : ""}</span>
                 )}
+                {previewData.total_duplicates > 0 && (
+                  <span className="text-gray-500"><strong>{previewData.total_duplicates}</strong> duplicate{previewData.total_duplicates !== 1 ? "s" : ""}</span>
+                )}
+                {previewData.total_conflicts > 0 && (
+                  <span className="text-amber-600"><strong>{previewData.total_conflicts}</strong> conflict{previewData.total_conflicts !== 1 ? "s" : ""}</span>
+                )}
               </div>
 
               {/* Active filters */}
@@ -347,6 +472,8 @@ export default function ImportWizard({ onImportSuccess, onClose }) {
                 <p className="text-green-700 text-sm mt-0.5">
                   {resultData.inserted} row{resultData.inserted !== 1 ? "s" : ""} inserted
                   {resultData.skipped > 0 && `, ${resultData.skipped} skipped`}
+                  {resultData.duplicates > 0 && ` (${resultData.duplicates} duplicate${resultData.duplicates !== 1 ? "s" : ""})`}
+                  {resultData.conflicts > 0 && `, ${resultData.conflicts} conflict${resultData.conflicts !== 1 ? "s" : ""}`}
                 </p>
               </div>
 
@@ -356,7 +483,9 @@ export default function ImportWizard({ onImportSuccess, onClose }) {
                   <tr className="text-left text-gray-500 border-b text-xs">
                     <th className="py-1.5 pr-4">File</th>
                     <th className="py-1.5 pr-4">Inserted</th>
-                    <th className="py-1.5">Skipped</th>
+                    <th className="py-1.5 pr-4">Skipped</th>
+                    <th className="py-1.5 pr-4">Duplicates</th>
+                    <th className="py-1.5">Conflicts</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -364,7 +493,9 @@ export default function ImportWizard({ onImportSuccess, onClose }) {
                     <tr key={i} className="border-b last:border-0">
                       <td className="py-1.5 pr-4 text-gray-700 break-all">{pf.filename}</td>
                       <td className="py-1.5 pr-4 text-green-700 font-medium">{pf.inserted}</td>
-                      <td className="py-1.5 text-gray-500">{pf.skipped}</td>
+                      <td className="py-1.5 pr-4 text-gray-500">{pf.skipped}</td>
+                      <td className="py-1.5 pr-4 text-gray-500">{pf.duplicates}</td>
+                      <td className="py-1.5 text-amber-600">{pf.conflicts}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -379,6 +510,46 @@ export default function ImportWizard({ onImportSuccess, onClose }) {
                     {showAllErrors ? "Hide" : "Show"} {resultData.errors.length} error{resultData.errors.length !== 1 ? "s" : ""}
                   </button>
                   {showAllErrors && <div className="mt-2"><ErrorTable errors={resultData.errors} /></div>}
+                </div>
+              )}
+
+              {resultData.conflict_rows?.length > 0 && (
+                <div className="border border-amber-200 bg-amber-50 rounded-lg p-3">
+                  <p className="text-amber-800 font-medium text-sm mb-1">
+                    {resultData.conflict_rows.length} conflict{resultData.conflict_rows.length !== 1 ? "s" : ""} need review
+                  </p>
+                  <p className="text-amber-700 text-xs mb-2">
+                    These rows weren't imported because a reading already exists for the same meter and date with a
+                    different value. Select the ones where the imported value should replace what's stored, then apply.
+                  </p>
+                  <ConflictTable
+                    conflicts={resultData.conflict_rows}
+                    selected={selectedConflicts}
+                    onToggle={toggleConflict}
+                    onToggleAll={toggleAllConflicts}
+                  />
+                  {resolveError && <p className="text-red-600 text-xs mt-2">{resolveError}</p>}
+                  {resolveResult && (
+                    <p className="text-green-700 text-xs mt-2">{resolveResult.updated} conflict{resolveResult.updated !== 1 ? "s" : ""} resolved.</p>
+                  )}
+                  <div className="flex gap-2 mt-2">
+                    <button
+                      onClick={() => handleResolveConflicts(
+                        resultData.conflict_rows.filter((c) => c.existing_id != null).map((c) => c.existing_id)
+                      )}
+                      disabled={resolving || !resultData.conflict_rows.some((c) => c.existing_id != null)}
+                      className="border border-amber-400 text-amber-700 hover:bg-amber-100 disabled:opacity-50 px-3 py-1.5 rounded text-xs font-medium"
+                    >
+                      {resolving ? "Replacing…" : "Replace all with imported value"}
+                    </button>
+                    <button
+                      onClick={() => handleResolveConflicts([...selectedConflicts])}
+                      disabled={resolving || selectedConflicts.size === 0}
+                      className="bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white px-3 py-1.5 rounded text-xs font-medium"
+                    >
+                      {resolving ? "Replacing…" : `Replace selected (${selectedConflicts.size})`}
+                    </button>
+                  </div>
                 </div>
               )}
 

@@ -129,10 +129,10 @@ def test_parse_csv_bytes_parse_datetime_requires_explicit_timestamp():
 
 def test_apply_filters_date_range_and_excluded_households():
     rows = [
-        {"mi": "H1", "record_date": date(2024, 1, 1)},
-        {"mi": "H2", "record_date": date(2024, 1, 10)},
-        {"mi": "H3", "record_date": date(2024, 1, 12)},
-        {"mi": "H4", "record_date": date(2024, 1, 25)},
+        {"mi": "H1", "record_date": date(2024, 1, 1), "reading": 100.0, "unit": 1},
+        {"mi": "H2", "record_date": date(2024, 1, 10), "reading": 100.0, "unit": 1},
+        {"mi": "H3", "record_date": date(2024, 1, 12), "reading": 100.0, "unit": 1},
+        {"mi": "H4", "record_date": date(2024, 1, 25), "reading": 100.0, "unit": 1},
     ]
 
     included, excluded = apply_filters(
@@ -152,9 +152,82 @@ def test_apply_filters_date_range_and_excluded_households():
 
 
 def test_apply_filters_no_filters_includes_everything():
-    rows = [{"mi": "H1", "record_date": date(2024, 1, 1)}]
+    rows = [{"mi": "H1", "record_date": date(2024, 1, 1), "reading": 100.0, "unit": 1}]
 
     included, excluded = apply_filters(rows, date_start=None, date_end=None, exclude_households=[])
 
     assert included == rows
     assert excluded == []
+
+
+def test_apply_filters_exact_duplicate_is_skipped():
+    rows = [{"row_num": 1, "mi": "H1", "record_date": date(2024, 1, 1), "reading": 100.0, "unit": 1}]
+    existing_keys = {("H1", date(2024, 1, 1)): {"id": 7, "reading": 100.0, "unit": 1}}
+
+    included, excluded = apply_filters(rows, None, None, [], existing_keys)
+
+    assert included == []
+    assert len(excluded) == 1
+    assert excluded[0]["filter_reason"] == "duplicate"
+
+
+def test_apply_filters_conflicting_value_is_flagged():
+    rows = [{"row_num": 1, "mi": "H1", "record_date": date(2024, 1, 1), "reading": 105.0, "unit": 1}]
+    existing_keys = {("H1", date(2024, 1, 1)): {"id": 7, "reading": 100.0, "unit": 1}}
+
+    included, excluded = apply_filters(rows, None, None, [], existing_keys)
+
+    assert included == []
+    assert len(excluded) == 1
+    conflict = excluded[0]
+    assert conflict["filter_reason"] == "conflict"
+    assert conflict["existing_id"] == 7
+    assert conflict["existing_reading"] == 100.0
+    assert conflict["existing_unit"] == 1
+
+
+def test_apply_filters_in_batch_dedup_mutates_shared_dict():
+    shared_keys = {}
+    file_a_rows = [{"row_num": 1, "mi": "H1", "record_date": date(2024, 1, 1), "reading": 100.0, "unit": 1}]
+    included_a, excluded_a = apply_filters(file_a_rows, None, None, [], shared_keys)
+    assert [r["mi"] for r in included_a] == ["H1"]
+    assert excluded_a == []
+
+    # Same key, same value in a second file of the same batch -> duplicate
+    file_b_dup = [{"row_num": 1, "mi": "H1", "record_date": date(2024, 1, 1), "reading": 100.0, "unit": 1}]
+    included_b, excluded_b = apply_filters(file_b_dup, None, None, [], shared_keys)
+    assert included_b == []
+    assert excluded_b[0]["filter_reason"] == "duplicate"
+
+    # Same key, different value in a third file -> conflict, with existing_id None
+    # since the row from file_a was never actually written to the DB.
+    file_c_conflict = [{"row_num": 1, "mi": "H1", "record_date": date(2024, 1, 1), "reading": 999.0, "unit": 1}]
+    included_c, excluded_c = apply_filters(file_c_conflict, None, None, [], shared_keys)
+    assert included_c == []
+    assert excluded_c[0]["filter_reason"] == "conflict"
+    assert excluded_c[0]["existing_id"] is None
+
+
+def test_apply_filters_dedups_within_single_call_without_existing_keys():
+    rows = [
+        {"row_num": 1, "mi": "H1", "record_date": date(2024, 1, 1), "reading": 100.0, "unit": 1},
+        {"row_num": 2, "mi": "H1", "record_date": date(2024, 1, 1), "reading": 100.0, "unit": 1},
+    ]
+
+    included, excluded = apply_filters(rows, None, None, [])
+
+    assert [r["row_num"] for r in included] == [1]
+    assert excluded[0]["row_num"] == 2
+    assert excluded[0]["filter_reason"] == "duplicate"
+
+
+def test_apply_filters_date_household_filter_takes_precedence_over_dedup():
+    rows = [{"row_num": 1, "mi": "H1", "record_date": date(2024, 1, 1), "reading": 100.0, "unit": 1}]
+    existing_keys = {("H1", date(2024, 1, 1)): {"id": 7, "reading": 100.0, "unit": 1}}
+
+    included, excluded = apply_filters(
+        rows, date_start=date(2024, 1, 5), date_end=None, exclude_households=[], existing_keys=existing_keys
+    )
+
+    assert included == []
+    assert excluded[0]["filter_reason"] == "date_range"

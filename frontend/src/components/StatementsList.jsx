@@ -96,13 +96,6 @@ function PeriodCell({ s, editing, onStartEdit, onStopEdit, onDateFieldBlur }) {
   );
 }
 
-function storedFilename(s) {
-  // Stored under the period's END month/year — see backend/main.py's _statement_pdf_path_if_exists.
-  // A needs-review stub with no known period yet is filed by id instead (_stub_pdf_path).
-  if (s.period_end_year == null || s.period_end_month == null) return `stub_${s.id}.pdf`;
-  return `${s.period_end_year}_${String(s.period_end_month).padStart(2, "0")}.pdf`;
-}
-
 export default function StatementsList({ billingStatements, verificationData, onDelete, onUpdate }) {
   const [editingPeriodId, setEditingPeriodId] = useState(null);
 
@@ -278,19 +271,7 @@ export default function StatementsList({ billingStatements, verificationData, on
                       )}
                     </td>
                     <td className="px-3 py-3 text-xs truncate max-w-32">
-                      {s.has_pdf ? (
-                        <a
-                          href={`/api/billing-statements/${s.id}/pdf`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          title={s.source_filename ?? undefined}
-                          className="text-blue-600 hover:text-blue-800 hover:underline"
-                        >
-                          {storedFilename(s)}
-                        </a>
-                      ) : (
-                        <span className="text-gray-400">{s.source_filename ?? "—"}</span>
-                      )}
+                      <span className="text-gray-400">{s.source_filename ?? "—"}</span>
                     </td>
                     <td className="px-3 py-3 text-right">
                       <button

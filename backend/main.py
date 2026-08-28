@@ -1,5 +1,4 @@
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header
-from fastapi.responses import FileResponse
 import os
 import base64
 import json
@@ -448,34 +447,8 @@ async def delete_reading(reading_id: int):
 OLLAMA_BASE_URL = os.environ.get("OLLAMA_BASE_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.environ.get("OLLAMA_MODEL", "llama3.1")
 
-# Stored PDFs persist in the Docker volume via DATA_DIR=/app/data (see oracle_ai.py's WALLET_DIR for the same pattern).
+# Oracle wallet files persist in the Docker volume via DATA_DIR=/app/data (see oracle_ai.py's WALLET_DIR).
 DATA_DIR = os.getenv("DATA_DIR", os.path.join(os.path.dirname(__file__), "..", "data"))
-STATEMENTS_DIR = os.path.join(DATA_DIR, "statements")
-
-
-def _statement_pdf_path(year: int, month: int) -> str:
-    return os.path.join(STATEMENTS_DIR, f"{year:04d}_{month:02d}.pdf")
-
-
-def _stub_pdf_path(stmt_id: int) -> str:
-    """A failed-import stub (see _create_stub_statement) doesn't have a known billing
-    period yet, so its PDF can't use the period-keyed filename above — it's filed by
-    statement id instead, until the user fills in the period and it gets renamed
-    (see update_billing_statement's PDF-move logic)."""
-    return os.path.join(STATEMENTS_DIR, f"stub_{stmt_id}.pdf")
-
-
-def _statement_pdf_path_if_exists(stmt) -> str | None:
-    """Stored PDFs are named after the billing period's END month/year (e.g. a bill
-    covering Nov 2024 - Jan 2025 is filed as 2025_01), matching how utilities usually
-    date the statement itself, not the period it opens with. Falls back to the stub
-    (id-keyed) path for a statement whose period isn't known yet."""
-    if stmt.period_end_year is not None and stmt.period_end_month is not None:
-        path = _statement_pdf_path(stmt.period_end_year, stmt.period_end_month)
-        if os.path.exists(path):
-            return path
-    stub_path = _stub_pdf_path(stmt.id)
-    return stub_path if os.path.exists(stub_path) else None
 
 
 EXTRACTION_PROMPT = """Return ONLY a valid JSON object with these exact keys (no markdown, no explanation):
@@ -748,12 +721,12 @@ def _extract_billing_data(pdf_bytes: bytes, filename: str, x_api_key: str | None
     }
 
 
-def _create_stub_statement(pdf_bytes: bytes, filename: str, reason: str) -> dict:
+def _create_stub_statement(filename: str, reason: str) -> dict:
     """Fallback for a PDF that failed automatic extraction (unreadable/encrypted PDF,
     no text layer, AI provider error, non-JSON response, or no billing period found):
-    rather than discarding the upload, preserve the PDF and create a stub statement
-    with needs_review=True, so the user can complete it through the normal editing UI
-    (StatementsList) instead of losing the file or having to retry/recreate it."""
+    rather than discarding the upload, create a stub statement with needs_review=True,
+    so the user can complete it through the normal editing UI (StatementsList) instead
+    of losing the upload or having to retry/recreate it."""
     db = SessionLocal()
     stmt = BillingStatement(
         billing_month=None,
@@ -773,10 +746,6 @@ def _create_stub_statement(pdf_bytes: bytes, filename: str, reason: str) -> dict
     stmt_id = stmt.id
     db.close()
 
-    os.makedirs(STATEMENTS_DIR, exist_ok=True)
-    with open(_stub_pdf_path(stmt_id), "wb") as f:
-        f.write(pdf_bytes)
-
     return {
         "id": stmt_id,
         "billing_month": None,
@@ -787,7 +756,6 @@ def _create_stub_statement(pdf_bytes: bytes, filename: str, reason: str) -> dict
         "total_cost": None,
         "cost_per_unit": None,
         "source_filename": filename,
-        "has_pdf": True,
         "needs_review": True,
         "review_reason": reason,
         "low_confidence_fields": [],
@@ -809,7 +777,7 @@ async def import_billing(
     try:
         extraction = _extract_billing_data(pdf_bytes, file.filename, x_api_key, x_api_provider)
     except HTTPException as e:
-        return _create_stub_statement(pdf_bytes, file.filename, str(e.detail))
+        return _create_stub_statement(file.filename, str(e.detail))
 
     start_month, start_year = extraction["start_month"], extraction["start_year"]
     end_month, end_year = extraction["end_month"], extraction["end_year"]
@@ -826,12 +794,6 @@ async def import_billing(
         raise HTTPException(status_code=409, detail=f"A statement for {start_month}/{start_year} already exists (id={existing.id}).")
 
     cost_per_unit = round(total_cost / total_units_consumed, 4) if total_units_consumed and total_cost is not None else None
-
-    # Filed under the period's END month/year (e.g. Nov-Jan bill -> 2025_01), matching
-    # how utilities date the statement itself rather than the period it opens with.
-    os.makedirs(STATEMENTS_DIR, exist_ok=True)
-    with open(_statement_pdf_path(end_year, end_month), "wb") as f:
-        f.write(pdf_bytes)
 
     stmt = BillingStatement(
         billing_month=start_month,
@@ -860,7 +822,6 @@ async def import_billing(
         "total_cost": stmt.total_cost,
         "cost_per_unit": stmt.cost_per_unit,
         "source_filename": stmt.source_filename,
-        "has_pdf": _statement_pdf_path_if_exists(stmt) is not None,
         "needs_review": stmt.needs_review,
         "low_confidence_fields": low_confidence_fields,
     }
@@ -887,25 +848,10 @@ async def get_billing_statements():
             "cost_per_unit": s.cost_per_unit,
             "source_filename": s.source_filename,
             "imported_at": s.imported_at.isoformat() if s.imported_at else None,
-            "has_pdf": _statement_pdf_path_if_exists(s) is not None,
             "needs_review": s.needs_review,
         }
         for s in stmts
     ]
-
-
-# Serve the stored PDF for a billing statement
-@app.get("/billing-statements/{stmt_id}/pdf")
-async def get_billing_statement_pdf(stmt_id: int):
-    db = SessionLocal()
-    stmt = db.query(BillingStatement).filter(BillingStatement.id == stmt_id).first()
-    db.close()
-    if not stmt:
-        raise HTTPException(status_code=404, detail="Billing statement not found")
-    path = _statement_pdf_path_if_exists(stmt)
-    if not path:
-        raise HTTPException(status_code=404, detail="No stored PDF for this statement (it may have been imported before file storage was added).")
-    return FileResponse(path, media_type="application/pdf", filename=os.path.basename(path))
 
 
 # Manually correct a billing statement's units/cost/dates — e.g. after an AI extraction
@@ -947,20 +893,8 @@ async def update_billing_statement(stmt_id: int, data: BillingStatementUpdate):
                 detail=f"A statement for {new_billing_month}/{new_billing_year} already exists (id={clash.id}).",
             )
 
-    old_pdf_path = _statement_pdf_path_if_exists(stmt)
     new_period_end_month = data.period_end_month if data.period_end_month is not None else stmt.period_end_month
     new_period_end_year = data.period_end_year if data.period_end_year is not None else stmt.period_end_year
-    new_pdf_path = (
-        _statement_pdf_path(new_period_end_year, new_period_end_month)
-        if new_period_end_year is not None and new_period_end_month is not None
-        else None
-    )
-    if old_pdf_path and new_pdf_path and new_pdf_path != old_pdf_path and os.path.exists(new_pdf_path):
-        db.close()
-        raise HTTPException(
-            status_code=409,
-            detail=f"Another statement's PDF is already stored for {new_period_end_month}/{new_period_end_year}.",
-        )
 
     if data.total_units_consumed is not None:
         stmt.total_units_consumed = data.total_units_consumed
@@ -982,12 +916,6 @@ async def update_billing_statement(stmt_id: int, data: BillingStatementUpdate):
     if stmt.needs_review and stmt.billing_month is not None and stmt.billing_year is not None:
         stmt.needs_review = False
 
-    # The stored PDF is filed by period-end year/month (see _statement_pdf_path_if_exists) —
-    # move it to match so it isn't orphaned under the old filename.
-    if old_pdf_path and new_pdf_path and new_pdf_path != old_pdf_path:
-        os.makedirs(STATEMENTS_DIR, exist_ok=True)
-        os.replace(old_pdf_path, new_pdf_path)
-
     db.commit()
     db.refresh(stmt)
     db.close()
@@ -1002,7 +930,6 @@ async def update_billing_statement(stmt_id: int, data: BillingStatementUpdate):
         "total_cost": stmt.total_cost,
         "cost_per_unit": stmt.cost_per_unit,
         "source_filename": stmt.source_filename,
-        "has_pdf": _statement_pdf_path_if_exists(stmt) is not None,
         "needs_review": stmt.needs_review,
     }
 
@@ -1015,12 +942,9 @@ async def delete_billing_statement(stmt_id: int):
     if not stmt:
         db.close()
         raise HTTPException(status_code=404, detail="Billing statement not found")
-    pdf_path = _statement_pdf_path_if_exists(stmt)
     db.delete(stmt)
     db.commit()
     db.close()
-    if pdf_path:
-        os.remove(pdf_path)
     return {"ok": True}
 
 

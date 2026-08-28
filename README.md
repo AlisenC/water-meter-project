@@ -87,7 +87,7 @@ docker compose up --build
 - Frontend: http://localhost:8080
 - Backend API: http://localhost:8500
 
-Readings, billing statements, and leak detection data live in Postgres. Imported PDF statements and Oracle wallet files are persisted in a bind-mounted `./data` directory (mapped to `/app/data` in the backend container), so they survive container restarts and rebuilds.
+Readings, billing statements, and leak detection data live in Postgres. Oracle wallet files are persisted in a bind-mounted `./data` directory (mapped to `/app/data` in the backend container), so they survive container restarts and rebuilds. Uploaded billing statement PDFs are only held in memory during import — the raw PDF is not stored, on disk or otherwise, after the statement's fields are extracted.
 
 ### Stop
 
@@ -117,7 +117,7 @@ Requires `TEST_DATABASE_URL` in `.env` (or exported) pointing at a dedicated Pos
 docker compose down -v
 ```
 
-> The `-v` flag only removes the `ollama_data` volume (the pulled local model). To reset app data: truncate the tables in Postgres (or drop and re-run `alembic upgrade head`) for readings/statements/leak sessions, and delete the `./data` directory yourself for imported PDFs and Oracle wallets.
+> The `-v` flag only removes the `ollama_data` volume (the pulled local model). To reset app data: truncate the tables in Postgres (or drop and re-run `alembic upgrade head`) for readings/statements/leak sessions, and delete the `./data` directory yourself for Oracle wallets.
 
 ---
 

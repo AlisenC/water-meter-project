@@ -28,9 +28,9 @@ class BillingStatement(Base):
     cost_per_unit = Column(Float, nullable=True)
     source_filename = Column(String, nullable=True)
     imported_at = Column(DateTime, nullable=False)
-    # Set when a PDF import fails automatic extraction: the PDF is preserved and this
-    # stub row is left for the user to complete through the normal editing UI, instead
-    # of the upload being discarded outright.
+    # Set when a statement's fields aren't known yet — either a PDF import failed
+    # automatic extraction, or the row was added blank by hand — and is left for the
+    # user to complete through the normal editing UI.
     needs_review = Column(Boolean, nullable=False, default=False)
 
 

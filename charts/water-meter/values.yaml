@@ -1,0 +1,33 @@
+# ALLOWED_ORIGINS has no default on purpose — templates/configmap.yaml wraps it in
+# Helm's `required` so a missing value fails the release loudly instead of silently
+# breaking CORS. Set it via the HelmRelease in apps/water-meter/release.yaml.
+allowedOrigins: ""
+
+ollamaModel: llama3.1
+
+image:
+  backend:
+    repository: ghcr.io/alisenc/water-meter-backend
+    tag: latest
+    pullPolicy: Always
+  frontend:
+    repository: ghcr.io/alisenc/water-meter-frontend
+    tag: latest
+    pullPolicy: Always
+  ollama:
+    repository: ollama/ollama
+    tag: latest
+    pullPolicy: IfNotPresent
+
+databaseSecretName: database-url
+
+backend:
+  replicaCount: 1
+  pvc:
+    size: 2Gi
+    storageClassName: local-path
+
+ollama:
+  pvc:
+    size: 10Gi
+    storageClassName: local-path

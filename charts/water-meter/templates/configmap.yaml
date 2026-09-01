@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: water-meter-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "water-meter.labels" . | nindent 4 }}
+data:
+  ALLOWED_ORIGINS: {{ required "allowedOrigins must be set (see values.yaml)" .Values.allowedOrigins | quote }}
+  OLLAMA_BASE_URL: "http://ollama:11434"
+  OLLAMA_MODEL: {{ .Values.ollamaModel | quote }}
+  DATA_DIR: "/app/data"

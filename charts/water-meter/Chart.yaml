@@ -1,0 +1,6 @@
+apiVersion: v2
+name: water-meter
+description: Backend, frontend, and Ollama for the water-meter app
+type: application
+version: 0.1.0
+appVersion: "1.0.0"

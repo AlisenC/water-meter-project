@@ -1,0 +1,18 @@
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: sealed-secrets
+  namespace: sealed-secrets
+spec:
+  interval: 1h0m0s
+  chart:
+    spec:
+      chart: sealed-secrets
+      sourceRef:
+        kind: HelmRepository
+        name: sealed-secrets
+        namespace: sealed-secrets
+  values:
+    # Matches kubeseal's default expected controller name, so --controller-namespace
+    # is the only non-default flag needed when fetching the cert or sealing secrets.
+    fullnameOverride: sealed-secrets-controller

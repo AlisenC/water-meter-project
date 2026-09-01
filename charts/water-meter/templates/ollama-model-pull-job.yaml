@@ -34,6 +34,8 @@ spec:
           image: "{{ .Values.image.ollama.repository }}:{{ .Values.image.ollama.tag }}"
           imagePullPolicy: {{ .Values.image.ollama.pullPolicy }}
           command: ["ollama", "pull", "{{ .Values.ollamaModel }}"]
+          resources:
+            {{- toYaml .Values.ollama.resources | nindent 12 }}
           env:
             - name: OLLAMA_HOST
               value: "ollama:11434"

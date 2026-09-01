@@ -31,3 +31,10 @@ ollama:
   pvc:
     size: 10Gi
     storageClassName: local-path
+  resources:
+    requests:
+      memory: 512Mi
+    limits:
+      # Caps a runaway/OOM load to killing just this container (visible as a
+      # restart) instead of risking the whole node on this 3.8GiB box.
+      memory: 2Gi

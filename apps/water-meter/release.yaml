@@ -5,6 +5,11 @@ metadata:
   namespace: water-meter
 spec:
   interval: 10m0s
+  # Default 5m Helm timeout is too tight on this box: the ollama image pull
+  # plus control-plane status updates under memory pressure can both run
+  # past it, failing the install before it even reaches the post-install
+  # model-pull hook.
+  timeout: 20m0s
   chart:
     spec:
       chart: ./charts/water-meter

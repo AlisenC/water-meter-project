@@ -26,6 +26,8 @@ spec:
           imagePullPolicy: {{ .Values.image.ollama.pullPolicy }}
           ports:
             - containerPort: 11434
+          resources:
+            {{- toYaml .Values.ollama.resources | nindent 12 }}
           volumeMounts:
             - name: data
               mountPath: /root/.ollama

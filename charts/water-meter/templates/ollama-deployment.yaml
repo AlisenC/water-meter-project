@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "water-meter.labels" . | nindent 4 }}
+    app: ollama
+spec:
+  # RWO PVC — same reasoning as the backend Deployment.
+  strategy:
+    type: Recreate
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ollama
+  template:
+    metadata:
+      labels:
+        {{- include "water-meter.labels" . | nindent 8 }}
+        app: ollama
+    spec:
+      containers:
+        - name: ollama
+          image: "{{ .Values.image.ollama.repository }}:{{ .Values.image.ollama.tag }}"
+          imagePullPolicy: {{ .Values.image.ollama.pullPolicy }}
+          ports:
+            - containerPort: 11434
+          volumeMounts:
+            - name: data
+              mountPath: /root/.ollama
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: ollama-data

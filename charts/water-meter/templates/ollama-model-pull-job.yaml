@@ -1,0 +1,39 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ollama-model-pull
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "water-meter.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": post-install,post-upgrade
+    "helm.sh/hook-weight": "1"
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 2
+  template:
+    metadata:
+      labels:
+        {{- include "water-meter.labels" . | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      # A same-pod initContainer would run before `ollama serve` starts, so
+      # nothing would be listening at localhost:11434 yet — this is a
+      # separate Job with its own wait loop instead. Also defensive against
+      # Helm hooks only waiting for prior resources to be *applied*, not
+      # *ready*.
+      initContainers:
+        - name: wait-for-ollama
+          image: busybox:1.36
+          command:
+            - sh
+            - -c
+            - until wget -q -O- http://ollama:11434/ ; do echo waiting for ollama; sleep 5; done
+      containers:
+        - name: pull
+          image: "{{ .Values.image.ollama.repository }}:{{ .Values.image.ollama.tag }}"
+          imagePullPolicy: {{ .Values.image.ollama.pullPolicy }}
+          command: ["ollama", "pull", "{{ .Values.ollamaModel }}"]
+          env:
+            - name: OLLAMA_HOST
+              value: "ollama:11434"

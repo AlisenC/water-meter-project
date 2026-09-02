@@ -121,6 +121,67 @@ docker compose down -v
 
 ---
 
+## Running in Kubernetes (production)
+
+The production deployment runs on a self-hosted [k3s](https://k3s.io) cluster, managed entirely via GitOps with [Flux](https://fluxcd.io) — this repo *is* the source Flux reconciles against, so a merge to `master` is the deploy step. External access is via a [Cloudflare Tunnel](https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/) (no inbound router ports, no exposed home IP, TLS terminated at Cloudflare's edge).
+
+### Prerequisites
+
+- A k3s (or any Kubernetes) cluster with [Flux bootstrapped](https://fluxcd.io/flux/installation/bootstrap/) against this repo
+- The [Sealed Secrets](https://github.com/bitnami-labs/sealed-secrets) controller installed in-cluster (deployed via GitOps too, see `infrastructure/sealed-secrets/`)
+- `kubeseal`, matching the in-cluster controller's version, for encrypting new/changed secret values before committing them
+
+### Repo layout
+
+| Path | Purpose |
+|------|---------|
+| `clusters/home/` | Flux `Kustomization` CRs — the entry point Flux reconciles, split into `infrastructure` (cluster-wide add-ons) and `apps` (this app), with `apps` depending on `infrastructure` |
+| `infrastructure/sealed-secrets/` | Sealed Secrets controller, deployed via a Flux `HelmRelease` |
+| `apps/water-meter/` | This app's namespace, `SealedSecret`s (`DATABASE_URL`, cloudflared tunnel credentials), and the `HelmRelease` that installs the chart below |
+| `charts/water-meter/` | The Helm chart — backend, frontend, Ollama, and cloudflared, templated from `values.yaml` |
+
+### Secrets
+
+`DATABASE_URL` and the cloudflared tunnel credentials are committed to git as `SealedSecret`s (`apps/water-meter/secrets/`) — encrypted client-side with `kubeseal` against the controller's public cert, so only the cluster can decrypt them. To add or rotate one:
+
+```bash
+kubectl create secret generic <name> --dry-run=client -o yaml \
+  --from-literal=KEY=value \
+  | kubeseal --controller-namespace sealed-secrets --format yaml > apps/water-meter/secrets/<name>-sealedsecret.yaml
+```
+
+Oracle wallet files are **not** in Secrets — they stay on the backend's PVC, same as the bind-mounted `./data` directory in docker-compose. Moving them to Secrets (needed for true multi-replica backend scaling) is deferred to a future change.
+
+### Cloudflare Tunnel
+
+The tunnel uses the classic locally-managed mode (credentials file + `config.yaml`, both mounted into the `cloudflared` pod) rather than the token/Zero-Trust-dashboard mode, since Zero Trust requires a payment method on file even on the free tier. The tunnel's ingress routes the public hostname straight to the `frontend` service — so, same as local dev, only paths under `/api/` reach the backend (see `frontend/nginx.conf`). External health checks and API calls must go through `/api/`, not the bare path — `https://<hostname>/health` will return the React app's `index.html`, not JSON; use `https://<hostname>/api/health`.
+
+### Configuring a deployment
+
+Cluster-specific values (tunnel ID, public hostname, `ALLOWED_ORIGINS`) are set in `apps/water-meter/release.yaml`'s `spec.values`, which override `charts/water-meter/values.yaml`'s defaults. `ALLOWED_ORIGINS` must be the real `https://` tunnel hostname — Cloudflare terminates TLS, but the browser's `Origin` header on requests is still `https://`, so an `http://` value here reproduces the exact CORS bug this setup avoids.
+
+### Deploying a change
+
+Push to `master` (or wait for Flux's next scheduled reconcile — `interval: 10m0s` on the `water-meter` `HelmRelease`); to force it sooner:
+
+```bash
+flux reconcile helmrelease water-meter -n water-meter --with-source
+```
+
+**Whenever a change touches `charts/water-meter/templates/` or `values.yaml`, bump `charts/water-meter/Chart.yaml`'s `version`.** Flux's default `HelmChart` reconcile strategy (`ChartVersion`) only repackages the chart when that version changes — a template-only change with no version bump gets silently ignored, with the `HelmRelease` still reporting `Ready`/`UpgradeSucceeded` against the *old* packaged chart. Don't trust that status alone after a template change — cross-check `kubectl describe helmrelease water-meter -n water-meter`'s `Inventory` actually lists the resources you expect.
+
+### Verifying a deployment
+
+```bash
+flux get helmreleases -A                        # water-meter should be Ready
+kubectl get pods -n water-meter                  # backend/frontend/ollama/cloudflared all Running
+curl https://<hostname>/api/health               # from outside the cluster's network — {"status":"ok"}
+```
+
+Then a full round-trip through the UI (e.g. add a reading) confirms `DATABASE_URL`, the `/api/` proxy, and CORS all work end to end.
+
+---
+
 ## Configuration
 
 ### AI provider (required for AI chat; PDF import falls back to a local model)
@@ -241,6 +302,10 @@ water-meter/
 │           ├── AIAssistant.jsx            # Chat / Ask Oracle / Semantic Search tabs
 │           ├── ApiKeySettings.jsx         # AI provider key management
 │           └── OracleSettings.jsx         # Oracle credential entry + sync actions
+├── charts/water-meter/      # Helm chart for the k8s deployment (backend/frontend/ollama/cloudflared)
+├── apps/water-meter/        # Flux HelmRelease, namespace, SealedSecrets for this app
+├── infrastructure/          # Cluster-wide add-ons deployed via GitOps (Sealed Secrets controller)
+├── clusters/home/           # Flux Kustomization CRs (the GitOps entry point)
 ├── docker-compose.yml
 └── README.md
 ```

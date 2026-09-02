@@ -18,8 +18,27 @@ image:
     repository: ollama/ollama
     tag: latest
     pullPolicy: IfNotPresent
+  cloudflared:
+    repository: cloudflare/cloudflared
+    # Pinned (unlike the other images) because this is the app's only path to
+    # the internet — an unplanned upstream version bump breaking the tunnel
+    # would fail silently (no git change, no Flux reconcile to point at).
+    tag: "2026.8.3"
+    pullPolicy: IfNotPresent
 
 databaseSecretName: database-url
+
+# tunnelId and hostname have no default on purpose, same reasoning as
+# allowedOrigins above — set via the HelmRelease in apps/water-meter/release.yaml.
+cloudflared:
+  tunnelId: ""
+  hostname: ""
+  credentialsSecretName: cloudflared-credentials
+  resources:
+    requests:
+      memory: 32Mi
+    limits:
+      memory: 128Mi
 
 backend:
   replicaCount: 1

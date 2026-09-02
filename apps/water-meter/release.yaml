@@ -31,6 +31,6 @@ spec:
       hostname: "water-meter.steamingcloud.com"
     image:
       backend:
-        tag: sha-d87a120
+        tag: sha-d65beee
       frontend:
-        tag: sha-d87a120
+        tag: sha-d65beee

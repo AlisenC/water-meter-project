@@ -336,13 +336,24 @@ water-meter/
 | GET | `/leak/sessions` | List all daily leak detection sessions |
 | GET | `/leak/sessions/active` | Get (or create) the active leak detection session |
 | GET | `/leak/sessions/{id}/analysis` | Per-day main-meter-vs-submeter comparison and leak flags, plus SFPUC/EyeOnWater rule results for the main meter |
+| GET | `/leak/sessions/{id}/submeter-readings` | List raw submeter readings for a session |
+| GET | `/leak/sessions/{id}/main-meter-readings` | List raw main-meter readings for a session |
+| DELETE | `/leak/sessions/{id}` | Delete an archived session and its readings (the active session can't be deleted) |
 | POST | `/leak/submeter/import/preview` | Preview a daily submeter CSV |
 | POST | `/leak/submeter/import/confirm` | Import a daily submeter CSV into the active session |
+| DELETE | `/leak/submeter/{id}` | Delete a single submeter reading |
+| DELETE | `/leak/submeter` | Bulk-delete submeter readings by id |
 | POST | `/leak/main-meter/import/preview` | Preview a daily main meter (AMI) CSV |
 | POST | `/leak/main-meter/import/confirm` | Import a daily main meter CSV into the active session |
+| DELETE | `/leak/main-meter/{id}` | Delete a single main-meter reading |
+| DELETE | `/leak/main-meter` | Bulk-delete main-meter readings by id |
 | POST | `/leak/sessions/{id}/archive` | Archive the active session, starting a fresh workspace |
 | POST | `/leak/sessions/{id}/restore` | Restore an archived session as the active workspace |
 | POST | `/ai/ask` | Chat with AI about your data |
+| POST | `/oracle/wallet/parse` | Upload an Oracle wallet zip; returns available service names for profile creation |
+| GET | `/oracle/profiles` | List saved Oracle connection profiles (passwords excluded) |
+| POST | `/oracle/profiles` | Create a connection profile from a previously parsed wallet |
+| DELETE | `/oracle/profiles/{id}` | Delete a connection profile and its wallet files |
 | GET | `/oracle/status` | Oracle connection health check |
 | POST | `/oracle/init` | Create Oracle tables |
 | POST | `/oracle/sync` | Sync Postgres → Oracle |
@@ -350,4 +361,4 @@ water-meter/
 | POST | `/oracle/vector-search` | Semantic similarity search |
 | POST | `/oracle/ask` | NL2SQL query against Oracle |
 
-AI endpoints accept `X-Api-Key` and `X-Api-Provider`.
+AI endpoints accept `X-Api-Key` and `X-Api-Provider`. Oracle endpoints (except wallet/profile management) accept `X-Oracle-Profile-Id` to select which saved connection profile to use.

@@ -162,13 +162,18 @@ Cluster-specific values (tunnel ID, public hostname, `ALLOWED_ORIGINS`) are set 
 
 ### Deploying a change
 
-Push to `master` (or wait for Flux's next scheduled reconcile — `interval: 10m0s` on the `water-meter` `HelmRelease`); to force it sooner:
+Merging to `master` runs CI (tests, lint, build) and, once that passes, publishes updated backend/frontend images. From there:
 
-```bash
-flux reconcile helmrelease water-meter -n water-meter --with-source
-```
-
-**Whenever a change touches `charts/water-meter/templates/` or `values.yaml`, bump `charts/water-meter/Chart.yaml`'s `version`.** Flux's default `HelmChart` reconcile strategy (`ChartVersion`) only repackages the chart when that version changes — a template-only change with no version bump gets silently ignored, with the `HelmRelease` still reporting `Ready`/`UpgradeSucceeded` against the *old* packaged chart. Don't trust that status alone after a template change — cross-check `kubectl describe helmrelease water-meter -n water-meter`'s `Inventory` actually lists the resources you expect.
+- **Code changes** (backend/frontend): the cluster is already tracking the latest image, so just restart the affected deployment(s) to roll it out:
+  ```bash
+  kubectl rollout restart deployment/backend -n water-meter
+  kubectl rollout restart deployment/frontend -n water-meter
+  ```
+- **Chart/config changes** (anything under `charts/water-meter/`, `apps/water-meter/`, `infrastructure/`, or `clusters/`): Flux picks these up on its own within a few minutes, or force it sooner:
+  ```bash
+  flux reconcile helmrelease water-meter -n water-meter --with-source
+  ```
+  If the change is to the Helm chart itself (`charts/water-meter/templates/` or `values.yaml`), also bump the `version` in `charts/water-meter/Chart.yaml` — otherwise Flux won't pick up the change.
 
 ### Verifying a deployment
 

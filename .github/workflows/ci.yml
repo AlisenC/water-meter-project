@@ -4,6 +4,15 @@ on:
   pull_request:
   push:
     branches: [master]
+    # A push that ONLY touches this file is the update-image-tags job's own
+    # bump commit landing on master. Without this, that push re-triggers the
+    # whole workflow, which rebuilds/re-pushes images under a new commit sha
+    # (even though the underlying code didn't change) and update-image-tags
+    # bumps the tag again -- an infinite loop of tag-bump PRs, each auto-
+    # merging into the next. A push that changes this file *and* something
+    # else still runs normally.
+    paths-ignore:
+      - apps/water-meter/release.yaml
   workflow_dispatch:
 
 concurrency:

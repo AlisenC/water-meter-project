@@ -50,6 +50,22 @@ jobs:
       - run: alembic -c backend/alembic.ini upgrade head
       - run: pytest backend/tests -v
 
+  helm-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: azure/setup-helm@v4
+        with:
+          version: "v3.16.3"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet "ruamel.yaml==0.18.*"
+      - name: Extract production values from apps/water-meter/release.yaml
+        run: python .github/scripts/extract_helmrelease_values.py apps/water-meter/release.yaml /tmp/prod-values.yaml
+      - run: helm lint charts/water-meter -f /tmp/prod-values.yaml
+      - run: helm template charts/water-meter -f /tmp/prod-values.yaml > /dev/null
+
   frontend-checks:
     runs-on: ubuntu-latest
     defaults:

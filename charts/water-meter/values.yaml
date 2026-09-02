@@ -6,6 +6,10 @@ allowedOrigins: ""
 ollamaModel: llama3.1
 
 image:
+  # `latest` here is only a default for a standalone/non-prod chart install.
+  # Production pins an immutable `sha-<shortsha>` tag via an override in
+  # apps/water-meter/release.yaml, kept in sync automatically by CI (see
+  # .github/workflows/ci.yml's update-image-tags job) after each image push.
   backend:
     repository: ghcr.io/alisenc/water-meter-backend
     tag: latest

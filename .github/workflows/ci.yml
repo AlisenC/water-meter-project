@@ -118,3 +118,53 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  update-image-tags:
+    needs: [backend-image, frontend-image]
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.ROLLOUT_PAT }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install --quiet "ruamel.yaml==0.18.*"
+      - name: Bump image tags in apps/water-meter/release.yaml
+        id: bump
+        run: |
+          set -euo pipefail
+          TAG="sha-${GITHUB_SHA:0:7}"
+          python .github/scripts/bump_image_tags.py apps/water-meter/release.yaml "$TAG"
+
+          if git diff --quiet -- apps/water-meter/release.yaml; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          BRANCH="automation/bump-image-tags-${GITHUB_SHA:0:7}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add apps/water-meter/release.yaml
+          git commit -m "chore: bump water-meter image tags to $TAG"
+          git push origin "$BRANCH"
+
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "branch=$BRANCH" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+      - name: Open and auto-merge PR
+        if: steps.bump.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.ROLLOUT_PAT }}
+        run: |
+          set -euo pipefail
+          PR_URL=$(gh pr create \
+            --title "chore: bump water-meter image tags to ${{ steps.bump.outputs.tag }}" \
+            --body "Automated follow-up to ${{ github.sha }}: points the water-meter HelmRelease at the images CI just published (\`${{ steps.bump.outputs.tag }}\`), so Flux picks up the change." \
+            --head "${{ steps.bump.outputs.branch }}" \
+            --base master)
+          gh pr merge --auto --squash "$PR_URL"

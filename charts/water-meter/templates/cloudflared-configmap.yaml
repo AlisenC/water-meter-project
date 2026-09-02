@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloudflared-config
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "water-meter.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    tunnel: {{ required "cloudflared.tunnelId must be set (see values.yaml)" .Values.cloudflared.tunnelId }}
+    credentials-file: /etc/cloudflared/creds/credentials.json
+    ingress:
+      - hostname: {{ required "cloudflared.hostname must be set (see values.yaml)" .Values.cloudflared.hostname }}
+        service: http://frontend:80
+      - service: http_status:404

@@ -19,6 +19,13 @@ spec:
         namespace: flux-system
   values:
     # Frontend traffic is same-origin through nginx's /api/ proxy (see
-    # frontend/src/api.js), so this doesn't gate the app's own requests today
-    # — placeholder until #44 sets up the Cloudflare Tunnel hostname.
-    allowedOrigins: "http://localhost:8080"
+    # frontend/src/api.js), so this only matters for direct browser calls to
+    # the backend. Must be https:// -- Cloudflare terminates TLS at its edge,
+    # but the browser's Origin header on requests is still the public
+    # https:// URL, so an http:// value here would reproduce the exact CORS
+    # bug this migration set out to fix.
+    allowedOrigins: "https://water-meter.steamingcloud.com"
+    cloudflared:
+      # Tunnel created in #43 (`cloudflared tunnel create water-meter`).
+      tunnelId: "c41d8657-892d-4e58-95e5-9fe4d4ae76ed"
+      hostname: "water-meter.steamingcloud.com"

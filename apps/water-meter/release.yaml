@@ -29,3 +29,8 @@ spec:
       # Tunnel created in #43 (`cloudflared tunnel create water-meter`).
       tunnelId: "c41d8657-892d-4e58-95e5-9fe4d4ae76ed"
       hostname: "water-meter.steamingcloud.com"
+    image:
+      backend:
+        tag: sha-d65beee
+      frontend:
+        tag: sha-d65beee

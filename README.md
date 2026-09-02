@@ -162,18 +162,16 @@ Cluster-specific values (tunnel ID, public hostname, `ALLOWED_ORIGINS`) are set 
 
 ### Deploying a change
 
-Merging to `master` runs CI (tests, lint, build) and, once that passes, publishes updated backend/frontend images. From there:
+Merging to `master` runs CI (tests, lint, build) and, once that passes, publishes updated backend/frontend images tagged `sha-<shortsha>`. From there:
 
-- **Code changes** (backend/frontend): the cluster is already tracking the latest image, so just restart the affected deployment(s) to roll it out:
-  ```bash
-  kubectl rollout restart deployment/backend -n water-meter
-  kubectl rollout restart deployment/frontend -n water-meter
-  ```
+- **Code changes** (backend/frontend): fully automatic, no manual step. CI's `update-image-tags` job runs after the image push, bumps `apps/water-meter/release.yaml`'s `image.backend.tag`/`image.frontend.tag` to the new `sha-<shortsha>`, and opens a second PR for that change. Since it's a mechanical follow-up (not a human-reviewed change), that PR auto-merges as soon as its own CI checks pass — so a normal merge to `master` produces a second, bot-authored PR in the history shortly after, and Flux picks up the resulting `HelmRelease` change on its own within a few minutes (or force it sooner, see below).
 - **Chart/config changes** (anything under `charts/water-meter/`, `apps/water-meter/`, `infrastructure/`, or `clusters/`): Flux picks these up on its own within a few minutes, or force it sooner:
   ```bash
   flux reconcile helmrelease water-meter -n water-meter --with-source
   ```
   If the change is to the Helm chart itself (`charts/water-meter/templates/` or `values.yaml`), also bump the `version` in `charts/water-meter/Chart.yaml` — otherwise Flux won't pick up the change.
+
+The `update-image-tags` job authenticates as a PAT (repo secret `ROLLOUT_PAT`, scoped to Contents + Pull requests read/write) rather than the default `GITHUB_TOKEN`, since GitHub doesn't trigger further workflow runs — including the required status checks the auto-merge waits on — for events caused by `GITHUB_TOKEN`. This also requires **Allow auto-merge** enabled in the repo's settings.
 
 ### Verifying a deployment
 

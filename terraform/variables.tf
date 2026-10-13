@@ -30,12 +30,6 @@ variable "db_identifier" {
   default     = "water-meter-db"
 }
 
-variable "db_name" {
-  description = "Initial database name created on the instance."
-  type        = string
-  default     = "water_meter"
-}
-
 variable "db_username" {
   description = "RDS master username."
   type        = string
@@ -101,19 +95,4 @@ variable "public_hostname" {
   description = "Public hostname served through the tunnel. Must match cloudflared.hostname in apps/water-meter/release.yaml."
   type        = string
   default     = "water-meter.steamingcloud.com"
-}
-
-variable "adopt_ids" {
-  description = <<-EOT
-    IDs of the hand-created resources, used only by the one-time import
-    blocks in imports.tf. Remove this variable together with imports.tf once
-    the first apply has adopted everything.
-  EOT
-  type = object({
-    security_group_id  = string
-    db_ingress_rule_id = string
-    tunnel_id          = string
-    dns_record_id      = string
-  })
-  default = null
 }

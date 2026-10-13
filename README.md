@@ -196,7 +196,15 @@ Flux manages everything *inside* the cluster. Everything the app depends on *out
 | AWS Budgets monthly cost alert (emails when spend after credits exceeds $1) | `budget.tf` |
 | S3 bucket holding Terraform's own state (versioned, encrypted, S3-native locking) | `state.tf` |
 
-The RDS config pins every free-tier-relevant setting explicitly (`db.t4g.micro`, 20GB gp2, single-AZ, Performance Insights and Enhanced Monitoring off), so a setting flipped in the console shows up as drift in `terraform plan` instead of a surprise bill. The master password is a write-only attribute and is never stored in state. RDS, the tunnel and the state bucket all have `prevent_destroy`, and RDS also has deletion protection.
+The RDS config pins every setting that affects cost explicitly:
+- `db.t4g.micro`, 20GB gp2, storage autoscaling off
+- single-AZ, 1-day backups
+- Performance Insights on its free tier (7-day retention, "standard" Database Insights)
+- Enhanced Monitoring off
+
+A setting flipped in the console therefore shows up as drift in `terraform plan` instead of as a surprise bill. The master password is a write-only attribute and is never stored in state. RDS, the tunnel and the state bucket all have `prevent_destroy`, and RDS also has deletion protection.
+
+These resources were originally created by hand and were adopted into Terraform with one-time `import` blocks, which have since been removed.
 
 CI only runs `terraform fmt -check` and `terraform validate`. It has no cloud credentials, so this public repo's CI logs never contain real infrastructure details. `plan` and `apply` run locally.
 
@@ -207,40 +215,45 @@ CI only runs `terraform fmt -check` and `terraform validate`. It has no cloud cr
 - A Cloudflare API token with **Zone → DNS → Edit** and **Account → Cloudflare Tunnel → Edit**, exported as `CLOUDFLARE_API_TOKEN`
 - `terraform/terraform.tfvars` and `terraform/backend.hcl`, copied from their `.example` files and filled in. Both are gitignored: they contain the home IP and account IDs, and this repo is public.
 
-### First-time setup: adopting the existing resources
+### Setting up a machine to run Terraform
 
-The resources above were originally created by hand, so the first run *imports* them instead of creating new ones. Run the commands from `terraform/`.
+Run these from `terraform/`, with `terraform.tfvars` and `backend.hcl` in place:
 
-1. **Fill in `adopt_ids`** in `terraform.tfvars`. These are the IDs of the security group, its port-5432 ingress rule (`sgr-...`, shown in the security group's inbound rules), the tunnel, and the DNS record. Get the DNS record ID from the Cloudflare API:
-   ```bash
-   curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "https://api.cloudflare.com/client/v4/zones/<zone-id>/dns_records?name=<hostname>"
-   ```
-2. **Create the state bucket.** It has to exist before Terraform can store state in it, so create it with local state first. Make a temporary `bootstrap_override.tf` (gitignored) containing `terraform { backend "local" {} }`, then:
-   ```bash
-   terraform init
-   terraform apply -target=aws_s3_bucket_lifecycle_configuration.tfstate -target=aws_s3_bucket_server_side_encryption_configuration.tfstate -target=aws_s3_bucket_public_access_block.tfstate
-   ```
-   Delete `bootstrap_override.tf`, then move the state into the bucket:
-   ```bash
-   terraform init -migrate-state -backend-config=backend.hcl
-   ```
-3. **Plan and check it carefully.**
-   ```bash
-   terraform plan
-   ```
-   The plan must show the five imports and **no `destroy` or `must be replaced` lines**. If it shows any, fix the config or tfvars to match reality (a security group name or description mismatch is the usual cause) and plan again. Expected in-place updates are the `ManagedBy`/`Project` tags, `deletion_protection = true`, and Terraform-only settings like `final_snapshot_identifier`.
-4. **Apply.**
-   ```bash
-   terraform apply
-   ```
-   Then run `terraform plan` again and confirm it reports `No changes.`
-5. **Remove the imports.** Delete `imports.tf` and the `adopt_ids` variable/tfvars entry. They're only for the one-time adoption, and they would fail on a fresh account.
+```bash
+terraform init -backend-config=backend.hcl
+terraform plan
+```
+
+The plan should report `No changes.` Anything else means someone changed the infrastructure outside Terraform. Review that drift before applying anything.
+
+### Bootstrapping the state bucket (new AWS account only)
+
+The state bucket has to exist before Terraform can store state in it, so it's created with local state first. Create a temporary `bootstrap_override.tf` (gitignored) containing:
+
+```hcl
+terraform {
+  backend "local" {}
+}
+```
+
+Then create the bucket. The quotes around each `-target=...` argument are needed in PowerShell, which otherwise splits these arguments at the dot.
+
+```bash
+terraform init
+terraform apply "-target=aws_s3_bucket_lifecycle_configuration.tfstate" "-target=aws_s3_bucket_server_side_encryption_configuration.tfstate" "-target=aws_s3_bucket_public_access_block.tfstate"
+```
+
+Delete `bootstrap_override.tf`, then move the state into the bucket:
+
+```bash
+terraform init -migrate-state -backend-config=backend.hcl
+```
 
 ### Common changes
 
 - **Home IP changed** (RDS connections time out from the cluster): update `home_ip_cidr` in `terraform.tfvars`, then `terraform apply`.
 - **Moving RDS to a new AWS account**:
-  1. Point `aws_profile` and `state_bucket_name` at the new account, write a new `backend.hcl`, and redo step 2 above. Answer `yes` both times Terraform offers to copy existing state. The Cloudflare resources carry over unchanged.
+  1. Point `aws_profile` and `state_bucket_name` at the new account, write a new `backend.hcl`, and follow [Bootstrapping the state bucket](#bootstrapping-the-state-bucket-new-aws-account-only). Answer `yes` both times Terraform offers to copy existing state. The Cloudflare resources carry over unchanged.
   2. Set the master password for the new instance, then run `terraform apply`:
      ```bash
      export TF_VAR_db_password='<new-password>'
@@ -248,8 +261,9 @@ The resources above were originally created by hand, so the first run *imports* 
      terraform apply
      ```
      This creates the instance with identical settings.
-  3. `pg_dump`/`pg_restore` the data across.
+  3. The instance starts with no application database. Create `water_meter`, then `pg_dump`/`pg_restore` the data across.
   4. Re-seal `DATABASE_URL` with the `rds_endpoint` output (see [Secrets](#secrets)), then `kubectl rollout restart deployment/backend -n water-meter`.
+- **Major Postgres upgrade**: RDS applies minor upgrades on its own, so `engine_version` is in `ignore_changes`. For a major upgrade, remove it from `ignore_changes` temporarily, set the new `engine_version` and `allow_major_version_upgrade = true`, and apply.
 - **Tunnel ID**: the `tunnel_id` output must match `cloudflared.tunnelId` in `apps/water-meter/release.yaml`.
 
 ---

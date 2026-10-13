@@ -2,3 +2,4 @@
 # Usage: terraform init -backend-config=backend.hcl
 bucket = "water-meter-tfstate-<aws-account-id>"
 region = "us-west-1"
+# profile = "water-meter"  # same AWS CLI profile as aws_profile in terraform.tfvars

@@ -24,12 +24,12 @@ resource "aws_vpc_security_group_ingress_rule" "db_from_home" {
 resource "aws_db_instance" "main" {
   identifier = var.db_identifier
 
-  engine = "postgres"
-  # Major version only: RDS applies minor upgrades itself, and pinning
-  # e.g. "18.6" would make Terraform try to undo them.
-  engine_version = "18"
+  engine         = "postgres"
+  engine_version = "18.6" # version at adoption; see ignore_changes below
 
-  db_name  = var.db_name
+  # No db_name: the instance was created without an initial database (the
+  # app's database was created afterwards), and setting one forces
+  # replacement.
   username = var.db_username
   # Write-only: never stored in state. Both stay null for the adopted
   # instance, so its existing password is left alone; set both to create the
@@ -39,12 +39,22 @@ resource "aws_db_instance" "main" {
 
   # Cost guardrails -- each of these is an option that silently adds to the
   # bill if flipped in the console, so keep them explicit.
-  instance_class               = "db.t4g.micro"
-  allocated_storage            = 20 # AWS minimum for Postgres
-  storage_type                 = "gp2"
-  multi_az                     = false
-  performance_insights_enabled = false
-  monitoring_interval          = 0 # Enhanced Monitoring off (bills CloudWatch)
+  instance_class          = "db.t4g.micro"
+  allocated_storage       = 20 # AWS minimum for Postgres
+  max_allocated_storage   = 0  # storage autoscaling off: it would grow past the free 20GB
+  storage_type            = "gp2"
+  multi_az                = false
+  backup_retention_period = 1 # backup storage up to the DB's size is free
+  monitoring_interval     = 0 # Enhanced Monitoring off (bills CloudWatch)
+
+  # 7-day retention and "standard" Database Insights are free; longer
+  # retention and "advanced" mode are not.
+  performance_insights_enabled          = true
+  performance_insights_retention_period = 7
+  database_insights_mode                = "standard"
+
+  storage_encrypted     = true # changing this forces replacement
+  copy_tags_to_snapshot = true
 
   publicly_accessible    = true
   vpc_security_group_ids = [aws_security_group.db.id]
@@ -55,5 +65,10 @@ resource "aws_db_instance" "main" {
 
   lifecycle {
     prevent_destroy = true
+    # auto_minor_version_upgrade (on by default) lets RDS move to newer minor
+    # versions on its own; without this, Terraform would see each one as
+    # drift and try to downgrade. For a deliberate major upgrade, remove this
+    # temporarily and set engine_version.
+    ignore_changes = [engine_version]
   }
 }

@@ -16,11 +16,3 @@ budget_email = "<you@example.com>"
 
 cloudflare_account_id = "<cloudflare-account-id>"
 cloudflare_zone_id    = "<zone-id-of-steamingcloud.com>"
-
-# One-time import IDs -- delete along with imports.tf after the first apply.
-adopt_ids = {
-  security_group_id  = "sg-<...>"
-  db_ingress_rule_id = "sgr-<...>"
-  tunnel_id          = "c41d8657-892d-4e58-95e5-9fe4d4ae76ed"
-  dns_record_id      = "<dns-record-id>"
-}

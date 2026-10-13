@@ -1,0 +1,4 @@
+# Copy to backend.hcl (gitignored) and fill in.
+# Usage: terraform init -backend-config=backend.hcl
+bucket = "water-meter-tfstate-<aws-account-id>"
+region = "us-west-1"

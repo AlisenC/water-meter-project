@@ -26,3 +26,13 @@ test_data/
 
 # Oracle wallet files (contain certificates and credentials)
 data/
+
+# Terraform (state and tfvars hold real account IDs / home IP; repo is public)
+terraform/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+terraform/terraform.tfvars
+terraform/backend.hcl
+*_override.tf
+crash.log

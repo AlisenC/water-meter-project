@@ -66,6 +66,22 @@ jobs:
       - run: helm lint charts/water-meter -f /tmp/prod-values.yaml
       - run: helm template charts/water-meter -f /tmp/prod-values.yaml > /dev/null
 
+  # Static checks only: no backend or cloud credentials, so nothing about the
+  # real infrastructure (home IP, account IDs) can reach the public CI logs.
+  terraform-validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.16.5"
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
+
   frontend-checks:
     runs-on: ubuntu-latest
     defaults:

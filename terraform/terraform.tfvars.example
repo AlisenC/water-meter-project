@@ -1,0 +1,18 @@
+# Copy to terraform.tfvars (gitignored) and fill in. This repo is public --
+# never commit the real values.
+
+state_bucket_name = "water-meter-tfstate-<aws-account-id>"
+# aws_profile     = "water-meter"
+
+home_ip_cidr = "<home-public-ip>/32"
+db_username  = "<rds-master-username>"
+
+# RDS console -> the instance -> Connectivity & security -> its security group.
+# Both must match exactly; a different name or description forces replacement.
+db_security_group_name        = "<sg-name>"
+db_security_group_description = "<sg-description>"
+
+budget_email = "<you@example.com>"
+
+cloudflare_account_id = "<cloudflare-account-id>"
+cloudflare_zone_id    = "<zone-id-of-steamingcloud.com>"
